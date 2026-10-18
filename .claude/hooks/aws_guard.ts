@@ -114,8 +114,9 @@ function parseAws(cmd: string): ParsedAws | { error: string } {
 }
 
 function evaluate(cmd: string): Verdict {
-  // Not an aws call? Stay out of the way.
-  if (!/(^|[\s;&|(`])aws(\s|$)/.test(cmd)) return { decision: "passthrough" };
+  // Not an aws call? Stay out of the way. A path prefix (/usr/local/bin/aws, ./aws, ~/bin/aws)
+  // or a quote ("aws") still counts as an aws call; parseAws sends path-prefixed ones to ask.
+  if (!/(^|[\s;&|(`'"/])aws(['"\s]|$)/.test(cmd)) return { decision: "passthrough" };
 
   // 1. Compound / indirect commands: can't reason about them, so ask.
   if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
