@@ -13,11 +13,11 @@ jobs:
     name: Typecheck, test and coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
@@ -43,7 +43,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload lcov report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-lcov
           path: coverage/lcov.info
@@ -61,11 +61,11 @@ jobs:
         # Drop a version when it reaches end of life and add the next one when it is released.
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
       # Only the tests that run the built dist/aws_guard.mjs under this Node version.
@@ -75,8 +75,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm install -g @anthropic-ai/claude-code
