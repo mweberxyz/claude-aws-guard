@@ -12,8 +12,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node: [20, 22]
+        # Node majors that are not yet end-of-life (https://nodejs.org/en/about/previous-releases).
+        # Drop a version when it reaches end of life and add the next one when it is released.
+        node: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
