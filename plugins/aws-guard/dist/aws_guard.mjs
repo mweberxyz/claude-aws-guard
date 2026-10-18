@@ -17,7 +17,7 @@ function shellSplit(s) {
     } else if (quote === '"') {
       if (c === '"')
         quote = null;
-      else if (c === "\\" && i + 1 < s.length && '"\\$`'.includes(s[i + 1]))
+      else if (c === "\\" && i + 1 < s.length && '\"\\$`'.includes(s[i + 1]))
         cur += s[++i];
       else
         cur += c;
