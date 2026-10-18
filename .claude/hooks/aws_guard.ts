@@ -10,6 +10,8 @@
 //   - fail-closed crashes: a non-zero exit from this script becomes exit 2 (block).
 // Run bare, a crash outside the try/catch below would fail open.
 
+export {}; // marks this file as a module so tsc accepts the top-level await
+
 type Verdict =
   | { decision: "allow" | "deny" | "ask"; reason: string }
   | { decision: "passthrough" }; // not an aws call: print nothing, normal permission flow
