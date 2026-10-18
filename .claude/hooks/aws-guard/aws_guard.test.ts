@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SCRIPT = join(import.meta.dir, "aws_guard.ts");
-const SETTINGS = join(import.meta.dir, "..", "settings.json");
+const SETTINGS = join(import.meta.dir, "..", "..", "settings.json");
 
 // Runs the script the way Claude Code does: JSON on stdin, decision on stdout, audit line on stderr.
 async function run(stdin: string) {
@@ -116,7 +116,7 @@ describe("settings.json wrapper", () => {
       stdin: new Blob([JSON.stringify({ tool_input: { command } })]),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HOME: home, CLAUDE_PROJECT_DIR: join(import.meta.dir, "..", "..") },
+      env: { ...process.env, HOME: home, CLAUDE_PROJECT_DIR: join(import.meta.dir, "..", "..", "..") },
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

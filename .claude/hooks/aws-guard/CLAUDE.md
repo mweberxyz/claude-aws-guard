@@ -1,4 +1,4 @@
-# .claude/hooks
+# .claude/hooks/aws-guard
 
 Holds `aws_guard`, a PreToolUse hook that guards `aws` CLI calls made through Claude Code's Bash tool. It runs on Bun (TypeScript).
 
@@ -12,12 +12,12 @@ Holds `aws_guard`, a PreToolUse hook that guards `aws` CLI calls made through Cl
 | `aws_guard.test.ts` | Subprocess tests. A small smoke set plus passthrough, fail-closed, audit-log and `settings.json` wrapper checks. |
 | `benchmarking.md` | Latency measurements and how to reproduce them. |
 
-The hook is registered in `../settings.json`, which also holds a second layer of `permissions.deny` entries.
+The hook is registered in `../../settings.json`, which also holds a second layer of `permissions.deny` entries.
 
 ## Commands
 
 ```sh
-cd /home/user/.claude/hooks
+cd /home/user/.claude/hooks/aws-guard
 bun test                  # all tests
 bun test --coverage       # coverage covers aws_guard_lib.ts only
 ```
@@ -36,7 +36,7 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 
 1. Change `aws_guard_lib.ts`.
 2. Add or update the row in the policy table in `aws_guard_lib.test.ts`.
-3. Update the `permissions.deny` entries in `../settings.json` if it is a hard deny, since they duplicate the script's denies on purpose.
+3. Update the `permissions.deny` entries in `../../settings.json` if it is a hard deny, since they duplicate the script's denies on purpose.
 4. Only touch the smoke set in `aws_guard.test.ts` if a decision type or the I/O path changed.
 5. Run `bun test --coverage`.
 

@@ -1,6 +1,6 @@
 # aws_guard benchmarking
 
-Per-call latency of the `aws_guard` PreToolUse hook, measured through the exact command string in `../settings.json`.
+Per-call latency of the `aws_guard` PreToolUse hook, measured through the exact command string in `../../settings.json`.
 
 ## Summary
 
