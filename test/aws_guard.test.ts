@@ -6,12 +6,13 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dir, "..");
 const PLUGIN = join(ROOT, "plugins", "aws-guard");
 const SCRIPT = join(PLUGIN, "src", "aws_guard.ts");
+const DIST = join(PLUGIN, "dist", "aws_guard.mjs");
 const HOOKS = join(ROOT, "plugins", "aws-guard", "hooks", "hooks.json");
 const EXAMPLE_SETTINGS = join(ROOT, "examples", "settings.json");
 
 // Runs the script the way Claude Code does: JSON on stdin, decision on stdout, audit line on stderr.
-async function run(stdin: string) {
-  const proc = Bun.spawn(["bun", "run", SCRIPT], {
+async function run(stdin: string, argv: string[] = ["bun", "run", SCRIPT]) {
+  const proc = Bun.spawn(argv, {
     stdin: new Blob([stdin]),
     stdout: "pipe",
     stderr: "pipe",
@@ -109,6 +110,46 @@ describe("audit log", () => {
   });
 });
 
+// The built file is what the plugin ships and what runs under Node, so check it directly.
+describe.skipIf(!Bun.which("node"))("built dist under node", () => {
+  const node = (command: string) =>
+    run(JSON.stringify({ tool_input: { command } }), ["node", DIST]);
+
+  test.each([
+    ["allow", `${P} s3 ls`],
+    ["deny", `${P} iam delete-user --user-name x`],
+    ["ask", `${P} ec2 run-instances`],
+  ])("%s", async (expected, cmd) => {
+    const r = await node(cmd);
+    expect(r.exitCode).toBe(0);
+    expect(r.decision).toBe(expected);
+    expect(JSON.parse(r.stderr.trim()).decision).toBe(expected);
+  });
+
+  test("passthrough prints nothing", async () => {
+    const r = await node("ls -la");
+    expect(r.out).toBeNull();
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe("");
+  });
+
+  test("malformed stdin is denied", async () => {
+    const r = await run("not json", ["node", DIST]);
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("aws_guard script failed");
+  });
+
+  test("dist matches a fresh build of src", async () => {
+    const out = join(mkdtempSync(join(tmpdir(), "aws-guard-build-")), "aws_guard.mjs");
+    const b = Bun.spawn(["bun", "build", SCRIPT, "--target=node", "--outfile", out], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    expect(await b.exited).toBe(0);
+    expect(readFileSync(DIST, "utf8")).toBe(readFileSync(out, "utf8"));
+  });
+});
+
 // Exercises the exact command string from hooks.json, so the shell wrapper is covered too.
 describe("hooks.json wrapper", () => {
   const hooks = JSON.parse(readFileSync(HOOKS, "utf8"));
@@ -143,6 +184,20 @@ describe("hooks.json wrapper", () => {
     await wrapper(home, "ls -la");
     const log = readFileSync(join(home, ".claude", "aws-audit.log"), "utf8").trim().split("\n");
     expect(log.map((l) => JSON.parse(l).decision)).toEqual(["allow", "deny"]);
+  });
+
+  test("exits 2 with a clear message when neither node nor bun is on PATH", async () => {
+    const home = mkdtempSync(join(tmpdir(), "aws-guard-"));
+    mkdirSync(join(home, ".claude"));
+    const proc = Bun.spawn(["/bin/sh", "-c", hookCfg.command], {
+      stdin: new Blob([JSON.stringify({ tool_input: { command: "ls" } })]),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { HOME: home, CLAUDE_PLUGIN_ROOT: PLUGIN, PATH: "/nonexistent" },
+    });
+    const stderr = await new Response(proc.stderr).text();
+    expect(await proc.exited).toBe(2);
+    expect(stderr).toContain("needs node or bun");
   });
 
   test("exits 2 (blocks) when the audit log can't be opened", async () => {

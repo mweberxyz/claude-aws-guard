@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { evaluate, parseAws, shellSplit } from "../plugins/aws-guard/src/aws_guard_lib";
+import { evaluate, parseAws, shellSplit, type Verdict } from "../plugins/aws-guard/src/aws_guard_lib";
+
+const reasonOf = (v: Verdict) => ("reason" in v ? v.reason : undefined);
 
 const P = "aws --profile sandbox";
 
@@ -236,8 +238,8 @@ describe("evaluate", () => {
   });
 
   test("deny beats a missing profile, prod beats an allowed read", () => {
-    expect(evaluate("aws iam delete-user").reason).toContain("blocked by policy");
-    expect(evaluate("aws --profile prod ec2 describe-instances --query Foo").reason).toContain("Prod");
+    expect(reasonOf(evaluate("aws iam delete-user"))).toContain("blocked by policy");
+    expect(reasonOf(evaluate("aws --profile prod ec2 describe-instances --query Foo"))).toContain("Prod");
   });
 
   test("query is trimmed before the wildcard check", () => {
@@ -260,7 +262,7 @@ describe("evaluate", () => {
   });
 
   test("ask reason names service and op", () => {
-    expect(evaluate("aws --profile d ec2 run-instances").reason).toBe(
+    expect(reasonOf(evaluate("aws --profile d ec2 run-instances"))).toBe(
       "Mutating or unrecognized: aws ec2 run-instances",
     );
   });

@@ -1,0 +1,18 @@
+{
+  "name": "claude-aws-guard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code hook that guards aws CLI calls made through the Bash tool",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build plugins/aws-guard/src/aws_guard.ts --target=node --outfile plugins/aws-guard/dist/aws_guard.mjs",
+    "validate": "claude plugin validate ./plugins/aws-guard && claude plugin validate ."
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}
