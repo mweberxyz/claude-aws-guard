@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build": "bun build plugins/aws-guard/src/aws_guard.ts --target=node --outfile plugins/aws-guard/dist/aws_guard.mjs",
     "validate": "claude plugin validate ./plugins/aws-guard && claude plugin validate .",
-    "check-dist": "bun run build && git diff --exit-code -- plugins/aws-guard/dist"
+    "check-dist": "bun run build && git diff --exit-code -- plugins/aws-guard/dist",
+    "bench": "bun scripts/bench.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

@@ -121,6 +121,28 @@ describe("configuration from CLAUDE_PLUGIN_OPTION_* variables", () => {
   });
 });
 
+describe("reading stdin", () => {
+  test("a very large command is read in full", async () => {
+    const filler = "x".repeat(300_000);
+    const r = await hook(`${P} s3 ls --query '${filler}'`);
+    expect(r.decision).toBe("allow");
+    expect(JSON.parse(r.stderr.trim()).cmd.length).toBeGreaterThan(300_000);
+  });
+
+  test("input that arrives late, in pieces, is read in full", async () => {
+    const proc = Bun.spawn(["bun", "run", SCRIPT], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const json = JSON.stringify({ tool_input: { command: `${P} s3 ls` } });
+    proc.stdin.write(json.slice(0, 10));
+    proc.stdin.flush();
+    await Bun.sleep(150);
+    proc.stdin.write(json.slice(10));
+    proc.stdin.end();
+    const out = JSON.parse(await new Response(proc.stdout).text());
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(await proc.exited).toBe(0);
+  });
+});
+
 describe("fail closed", () => {
   test.each([["not json"], [""], ["{"]])("malformed stdin %p is denied with the error", async (stdin) => {
     const r = await run(stdin);

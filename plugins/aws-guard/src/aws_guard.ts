@@ -10,19 +10,39 @@
 //   - fail-closed crashes: a non-zero exit from this script becomes exit 2 (block).
 // Run bare, a crash outside the try/catch below would fail open.
 
+import { readSync } from "node:fs";
 import { evaluate, loadConfig, type Verdict } from "./aws_guard_lib";
 
 export {}; // marks this file as a module so tsc accepts the top-level await
 
-async function readStdin(): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
+// Reads all of stdin with plain reads on fd 0. process.stdin's stream machinery costs about 17 ms of
+// startup on Bun, which would be added to every Bash call. A non-blocking pipe can report EAGAIN
+// when no data is ready yet, so wait briefly and retry instead of failing or dropping input.
+function readStdin(): string {
+  const chunks: Buffer[] = [];
+  const buf = Buffer.alloc(65536);
+  for (;;) {
+    let n: number;
+    try {
+      n = readSync(0, buf, 0, buf.length, null);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "EAGAIN") {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+        continue;
+      }
+      if (code === "EOF") break;
+      throw e;
+    }
+    if (n === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 
 let result: Verdict;
 try {
-  const input = JSON.parse(await readStdin()) as { tool_input?: { command?: string } };
+  const input = JSON.parse(readStdin()) as { tool_input?: { command?: string } };
   const cmd = input.tool_input?.command ?? "";
   if (typeof cmd !== "string") throw new Error("tool_input.command is not a string");
   result = evaluate(cmd, loadConfig(process.env));

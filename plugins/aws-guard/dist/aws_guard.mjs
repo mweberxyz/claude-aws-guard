@@ -1,3 +1,6 @@
+// plugins/aws-guard/src/aws_guard.ts
+import { readSync } from "node:fs";
+
 // plugins/aws-guard/src/aws_guard_lib.ts
 function shellSplit(s) {
   const out = [];
@@ -207,15 +210,32 @@ function evaluate(cmd, config = DEFAULT_CONFIG) {
 }
 
 // plugins/aws-guard/src/aws_guard.ts
-async function readStdin() {
+function readStdin() {
   const chunks = [];
-  for await (const chunk of process.stdin)
-    chunks.push(chunk);
+  const buf = Buffer.alloc(65536);
+  for (;; ) {
+    let n;
+    try {
+      n = readSync(0, buf, 0, buf.length, null);
+    } catch (e) {
+      const code = e.code;
+      if (code === "EAGAIN") {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+        continue;
+      }
+      if (code === "EOF")
+        break;
+      throw e;
+    }
+    if (n === 0)
+      break;
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 var result;
 try {
-  const input = JSON.parse(await readStdin());
+  const input = JSON.parse(readStdin());
   const cmd = input.tool_input?.command ?? "";
   if (typeof cmd !== "string")
     throw new Error("tool_input.command is not a string");
