@@ -106,6 +106,7 @@ const VALUE_FLAGS = new Set([
 
 const positional: string[] = [];
 let profile: string | undefined = env.AWS_PROFILE;
+let query: string | undefined;
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith("--")) {
@@ -113,6 +114,7 @@ for (let i = 0; i < argv.length; i++) {
     let value = inline;
     if (inline === undefined && VALUE_FLAGS.has(name)) value = argv[++i];
     if (name === "--profile") profile = value;
+    if (name === "--query") query = value;
   } else if (!a.startsWith("-")) {
     positional.push(a);
   }
@@ -144,10 +146,25 @@ if (profile && /prod/i.test(profile)) {
 // 3. Require explicit identity so we never hit a default/prod account.
 if (!profile) decide("deny", "Add --profile <sandbox-profile> (and --region)");
 
-// 4. Auto-allow read-only verbs.
-if (/^(describe|list|get|head|lookup|batch-get)-/.test(op) || (service === "s3" && op === "ls")) {
-  decide("allow", "Read-only aws call");
+// 4. Read-only verbs: require a --query that actually narrows the output,
+//    so the caller has to decide what it needs instead of pulling everything.
+//    (`aws s3 ls` doesn't support --query, so it's exempt.)
+if (/^(describe|list|get|head|lookup|batch-get)-/.test(op)) {
+  const q = query?.trim();
+  if (!q) {
+    decide(
+      "deny",
+      "Read calls need --query selecting only the fields you need " +
+        "(e.g. --query 'Reservations[].Instances[].[InstanceId,State.Name]')",
+    );
+  }
+  // "@" (JMESPath identity) and bare wildcards return everything: not a real narrowing.
+  if (/^(@|\*|\[\*\]|\[\]|\*\.\*)$/.test(q!)) {
+    decide("deny", `--query '${q}' selects everything; choose specific fields`);
+  }
+  decide("allow", "Read-only aws call with a narrowing --query");
 }
+if (service === "s3" && op === "ls") decide("allow", "Read-only aws call");
 if (has("--dry-run")) decide("allow", "Dry run");
 
 // 5. Everything else (create/update/delete/s3 cp/rm/sync...) -> human decides.
