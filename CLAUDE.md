@@ -28,6 +28,7 @@ bun install
 bun run typecheck         # tsc --strict
 bun test                  # all tests
 bun test --coverage       # coverage covers the lib only
+bun run test:node         # only the tests that run dist/ under the Node on PATH (the CI matrix runs this)
 bun run build             # rebuild dist/ (use Bun 1.4.2: CI pins it)
 bun run check-dist        # fail if dist/ differs from a fresh build
 bun run validate          # claude plugin validate, plugin and marketplace

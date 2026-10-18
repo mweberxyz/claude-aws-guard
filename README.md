@@ -174,6 +174,7 @@ bun install
 bun run typecheck       # tsc --strict
 bun test                # all tests
 bun test --coverage     # coverage of the policy lib
+bun run test:node       # only the tests that run the built file under your Node
 bun run build           # rebuild plugins/aws-guard/dist after changing src/
 bun run check-dist      # fail if dist/ is out of date
 bun run validate        # claude plugin validate, plugin and marketplace

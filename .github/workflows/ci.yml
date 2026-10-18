@@ -9,7 +9,50 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  check:
+    name: Typecheck, test and coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Test with coverage
+        shell: bash
+        run: bun test --coverage --coverage-reporter=text --coverage-reporter=lcov 2>&1 | tee test-output.txt
+      - name: Show coverage in the run summary
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          {
+            echo "### Test coverage"
+            echo
+            row=$(grep -m1 '^All files' test-output.txt || true)
+            if [ -n "$row" ]; then
+              echo "$row" | awk -F'|' '{gsub(/ /,"",$2); gsub(/ /,"",$3); print "**" $2 "% of functions, " $3 "% of lines** (policy lib)"}'
+            fi
+            echo
+            echo '```text'
+            grep -vE '^\((pass|skip)\)' test-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload lcov report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: warn
+      # dist/ is committed, so it must match what src/ builds to (bun 1.4.2 produced it).
+      - run: bun run check-dist
+
+  node:
+    name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -25,11 +68,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun test
-      # dist/ is committed, so it must match what src/ builds to (bun 1.4.2 produced it).
-      - run: bun run check-dist
+      # Only the tests that run the built dist/aws_guard.mjs under this Node version.
+      # Everything else is version-independent and already ran once in the check job.
+      - run: bun run test:node
 
   validate:
     runs-on: ubuntu-latest

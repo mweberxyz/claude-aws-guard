@@ -7,6 +7,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "test:node": "bun test --test-name-pattern 'built dist under node'",
     "typecheck": "tsc --noEmit",
     "build": "bun build plugins/aws-guard/src/aws_guard.ts --target=node --outfile plugins/aws-guard/dist/aws_guard.mjs",
     "validate": "claude plugin validate ./plugins/aws-guard && claude plugin validate .",
