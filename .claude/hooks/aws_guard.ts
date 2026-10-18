@@ -7,8 +7,9 @@ import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-type Decision = "allow" | "deny" | "ask";
-type Result = { decision: Decision; reason: string } | null; // null = not an aws call
+type Verdict =
+  | { decision: "allow" | "deny" | "ask"; reason: string }
+  | { decision: "passthrough" }; // not an aws call: print nothing, normal permission flow
 
 const AUDIT_LOG = join(homedir(), ".claude", "aws-audit.log");
 
@@ -67,9 +68,9 @@ const DENY: [string, RegExp][] = [
   ["configure", /.*/],
 ];
 
-function evaluate(cmd: string): Result {
+function evaluate(cmd: string): Verdict {
   // Not an aws call? Stay out of the way.
-  if (!/(^|[\s;&|(`])aws(\s|$)/.test(cmd)) return null;
+  if (!/(^|[\s;&|(`])aws(\s|$)/.test(cmd)) return { decision: "passthrough" };
 
   // 1. Compound / indirect commands: can't reason about them, so ask.
   if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
@@ -156,21 +157,21 @@ function evaluate(cmd: string): Result {
   return { decision: "ask", reason: `Mutating or unrecognized: aws ${service} ${op}` };
 }
 
-let result: Result;
+let result: Verdict;
 try {
   const input = (await Bun.stdin.json()) as { tool_input?: { command?: string } };
   const cmd = input.tool_input?.command ?? "";
   result = evaluate(cmd);
   // The audit log is part of the control: if this throws, the catch denies.
-  if (result) {
+  if (result.decision !== "passthrough") {
     appendFileSync(AUDIT_LOG, JSON.stringify({ ts: new Date().toISOString(), ...result, cmd }) + "\n");
   }
 } catch (e) {
   result = { decision: "deny", reason: `aws_guard script failed: ${e}` };
 }
 
-// No output (null) = not an aws call, normal permission flow.
-if (result) {
+// passthrough prints nothing, so the normal permission flow applies.
+if (result.decision !== "passthrough") {
   console.log(
     JSON.stringify({
       hookSpecificOutput: {
