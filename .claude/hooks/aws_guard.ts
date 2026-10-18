@@ -68,21 +68,17 @@ const DENY: [string, RegExp][] = [
   ["configure", /.*/],
 ];
 
-function evaluate(cmd: string): Verdict {
-  // Not an aws call? Stay out of the way.
-  if (!/(^|[\s;&|(`])aws(\s|$)/.test(cmd)) return { decision: "passthrough" };
+type ParsedAws = {
+  service: string;
+  op: string;
+  profile: string | undefined; // from --profile, falling back to a leading AWS_PROFILE=
+  query: string | undefined;
+  has: (flag: string) => boolean; // whether a flag appears, as `--flag` or `--flag=value`
+};
 
-  // 1. Compound / indirect commands: can't reason about them, so ask.
-  if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
-    return { decision: "ask", reason: "aws inside a compound or indirect command" };
-  }
-
-  let argv: string[];
-  try {
-    argv = shellSplit(cmd);
-  } catch {
-    return { decision: "ask", reason: "Unparseable command" };
-  }
+// Parses `[VAR=value ...] aws [global flags] <service> <op> [flags]`.
+function parseAws(tokens: string[]): ParsedAws | { error: string } {
+  const argv = [...tokens];
 
   // Strip leading VAR=value assignments (e.g. AWS_PROFILE=sandbox aws ...).
   const env: Record<string, string> = {};
@@ -90,10 +86,7 @@ function evaluate(cmd: string): Verdict {
     const [k, ...v] = argv.shift()!.split("=");
     env[k] = v.join("=");
   }
-  if (argv[0] !== "aws") {
-    return { decision: "ask", reason: "aws is not the command being run directly" };
-  }
-  argv = argv.slice(1);
+  if (argv.shift() !== "aws") return { error: "aws is not the command being run directly" };
 
   const positional: string[] = [];
   let profile: string | undefined = env.AWS_PROFILE;
@@ -112,6 +105,28 @@ function evaluate(cmd: string): Verdict {
   }
   const [service = "", op = ""] = positional;
   const has = (flag: string) => argv.some((a) => a === flag || a.startsWith(flag + "="));
+  return { service, op, profile, query, has };
+}
+
+function evaluate(cmd: string): Verdict {
+  // Not an aws call? Stay out of the way.
+  if (!/(^|[\s;&|(`])aws(\s|$)/.test(cmd)) return { decision: "passthrough" };
+
+  // 1. Compound / indirect commands: can't reason about them, so ask.
+  if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
+    return { decision: "ask", reason: "aws inside a compound or indirect command" };
+  }
+
+  let argv: string[];
+  try {
+    argv = shellSplit(cmd);
+  } catch {
+    return { decision: "ask", reason: "Unparseable command" };
+  }
+
+  const parsed = parseAws(argv);
+  if ("error" in parsed) return { decision: "ask", reason: parsed.error };
+  const { service, op, profile, query, has } = parsed;
 
   // 2. Hard denies
   for (const [svc, pat] of DENY) {
