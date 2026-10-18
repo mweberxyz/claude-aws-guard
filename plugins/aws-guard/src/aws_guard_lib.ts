@@ -200,12 +200,12 @@ export function evaluate(cmd: string, config: Config | { error: string } = DEFAU
     return { decision: "deny", reason: "Decrypting SSM parameters is blocked" };
   }
   if (profile && config.blockedProfile.test(profile)) {
-    return { decision: "deny", reason: "Prod profiles are off-limits from Claude Code" };
+    return { decision: "deny", reason: `Profile '${profile}' is blocked (it matches the blocked profile pattern)` };
   }
 
   // 3. Require explicit identity so we never hit a default/prod account.
   if (!profile) {
-    return { decision: "deny", reason: "Add --profile <sandbox-profile> (and --region)" };
+    return { decision: "deny", reason: "No AWS profile given. Add --profile <name>, or prefix the command with AWS_PROFILE=<name>." };
   }
 
   // 4. Read-only verbs: require a --query that actually narrows the output,

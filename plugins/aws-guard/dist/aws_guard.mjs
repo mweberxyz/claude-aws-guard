@@ -178,10 +178,10 @@ function evaluate(cmd, config = DEFAULT_CONFIG) {
     return { decision: "deny", reason: "Decrypting SSM parameters is blocked" };
   }
   if (profile && config.blockedProfile.test(profile)) {
-    return { decision: "deny", reason: "Prod profiles are off-limits from Claude Code" };
+    return { decision: "deny", reason: `Profile '${profile}' is blocked (it matches the blocked profile pattern)` };
   }
   if (!profile) {
-    return { decision: "deny", reason: "Add --profile <sandbox-profile> (and --region)" };
+    return { decision: "deny", reason: "No AWS profile given. Add --profile <name>, or prefix the command with AWS_PROFILE=<name>." };
   }
   if (/^(describe|list|get|head|lookup|batch-get)-/.test(op)) {
     if (!config.requireQuery) {

@@ -239,7 +239,9 @@ describe("evaluate", () => {
 
   test("deny beats a missing profile, prod beats an allowed read", () => {
     expect(reasonOf(evaluate("aws iam delete-user"))).toContain("blocked by policy");
-    expect(reasonOf(evaluate("aws --profile prod ec2 describe-instances --query Foo"))).toContain("Prod");
+    expect(reasonOf(evaluate("aws --profile prod ec2 describe-instances --query Foo"))).toBe(
+      "Profile 'prod' is blocked (it matches the blocked profile pattern)",
+    );
   });
 
   test("query is trimmed before the wildcard check", () => {
@@ -255,6 +257,12 @@ describe("evaluate", () => {
   test("read verbs are matched by prefix only", () => {
     expect(evaluate("aws --profile d ec2 modify-describe-thing").decision).toBe("ask");
     expect(evaluate("aws --profile d ec2 describe").decision).toBe("ask");
+  });
+
+  test("the missing-profile reason names the two ways to give one and does not ask for a region", () => {
+    const reason = reasonOf(evaluate("aws s3 ls"));
+    expect(reason).toBe("No AWS profile given. Add --profile <name>, or prefix the command with AWS_PROFILE=<name>.");
+    expect(reason).not.toContain("region");
   });
 
   test("service-less op doesn't crash", () => {
