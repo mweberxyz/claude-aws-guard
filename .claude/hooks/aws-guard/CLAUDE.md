@@ -46,5 +46,5 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 - `aws` after a `/` or a quote counts as an aws call. Path-prefixed calls (`/usr/local/bin/aws`) go to `ask`, and so does any command ending in `/aws` such as `ls /var/aws`.
 - The wrapper's `2>>` redirect and `||` assume a POSIX shell. It won't work as written on Windows without Git Bash or WSL.
 - `bun` must be on the PATH. If it isn't, every Bash call is blocked, not just `aws` ones.
-- The design relies on Claude Code's hook semantics (exit 2 blocks, `permissionDecision` is `allow`/`deny`/`ask`, `timeout` in seconds, `onFailure`). These were checked against the hooks docs but the hook has not been exercised inside Claude Code itself.
+- The design relies on Claude Code's hook semantics (exit 2 blocks, `permissionDecision` is `allow`/`deny`/`ask`, `timeout` in seconds, `onFailure`). These were checked against the hooks docs. Inside Claude Code, deny (reason shown to Claude), allow and hook-failure blocking have been observed working; how an `ask` prompts an interactive user has not been observed.
 - `onFailure` needs Claude Code v2.1.295 or later.
