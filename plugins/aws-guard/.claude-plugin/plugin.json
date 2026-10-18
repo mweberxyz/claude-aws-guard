@@ -8,6 +8,8 @@
     "url": "https://github.com/mweberxyz"
   },
   "homepage": "https://github.com/mweberxyz/claude-aws-guard",
+  "documentationUrl": "https://github.com/mweberxyz/claude-aws-guard#readme",
+  "supportUrl": "https://github.com/mweberxyz/claude-aws-guard/issues",
   "repository": "https://github.com/mweberxyz/claude-aws-guard",
   "license": "MIT",
   "keywords": [
