@@ -64,6 +64,58 @@ var DENY = [
   ["secretsmanager", /^get-secret-value$/],
   ["configure", /.*/]
 ];
+var DEFAULT_CONFIG = {
+  blockedProfile: /prod/i,
+  extraDenied: [],
+  requireQuery: true,
+  envProfile: undefined
+};
+function parseBool(raw, fallback, name) {
+  const v = raw?.trim().toLowerCase();
+  if (!v)
+    return fallback;
+  if (["true", "1", "yes"].includes(v))
+    return true;
+  if (["false", "0", "no"].includes(v))
+    return false;
+  return { error: `${name} must be true or false, got '${raw}'` };
+}
+function loadConfig(env) {
+  const opt = (key) => env[`CLAUDE_PLUGIN_OPTION_${key}`];
+  let blockedProfile = DEFAULT_CONFIG.blockedProfile;
+  const pattern = opt("BLOCKED_PROFILE_PATTERN")?.trim();
+  if (pattern) {
+    try {
+      blockedProfile = new RegExp(pattern, "i");
+    } catch (e) {
+      return { error: `blocked_profile_pattern is not a valid regular expression: ${e}` };
+    }
+  }
+  const extraDenied = [];
+  for (const raw of (opt("EXTRA_DENIED_COMMANDS") ?? "").split(",")) {
+    const entry = raw.trim();
+    if (!entry)
+      continue;
+    const [service, ...rest] = entry.split(":");
+    const prefix = rest.join(":");
+    if (!/^[a-z0-9-]+$/.test(service) || rest.length > 0 && !/^[a-z0-9-]+$/.test(prefix)) {
+      return { error: `extra_denied_commands entry '${entry}' must look like 'service' or 'service:operation-prefix'` };
+    }
+    extraDenied.push([service, new RegExp(`^${prefix}`)]);
+  }
+  const requireQuery = parseBool(opt("REQUIRE_QUERY"), DEFAULT_CONFIG.requireQuery, "require_query");
+  if (typeof requireQuery === "object")
+    return requireQuery;
+  const useEnvProfile = parseBool(opt("USE_ENVIRONMENT_PROFILE"), false, "use_environment_profile");
+  if (typeof useEnvProfile === "object")
+    return useEnvProfile;
+  return {
+    blockedProfile,
+    extraDenied,
+    requireQuery,
+    envProfile: useEnvProfile ? env.AWS_PROFILE?.trim() || undefined : undefined
+  };
+}
 function parseAws(cmd) {
   const tokens = shellSplit(cmd);
   if ("error" in tokens)
@@ -98,31 +150,43 @@ function parseAws(cmd) {
   const has = (flag) => argv.some((a) => a === flag || a.startsWith(flag + "="));
   return { service, op, profile, query, has };
 }
-function evaluate(cmd) {
+function evaluate(cmd, config = DEFAULT_CONFIG) {
   if (!/(^|[\s;&|(`'"/])aws(['"\s]|$)/.test(cmd))
     return { decision: "passthrough" };
+  if ("error" in config) {
+    return { decision: "deny", reason: `aws-guard configuration error: ${config.error}` };
+  }
   if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
     return { decision: "ask", reason: "aws inside a compound or indirect command" };
   }
   const parsed = parseAws(cmd);
   if ("error" in parsed)
     return { decision: "ask", reason: parsed.error };
-  const { service, op, profile, query, has } = parsed;
+  const { service, op, query, has } = parsed;
+  const profile = parsed.profile ?? config.envProfile;
   for (const [svc, pat] of DENY) {
     if (service === svc && pat.test(op)) {
       return { decision: "deny", reason: `aws ${service} ${op} is blocked by policy` };
     }
   }
+  for (const [svc, pat] of config.extraDenied) {
+    if (service === svc && pat.test(op)) {
+      return { decision: "deny", reason: `aws ${service} ${op} is blocked by configuration` };
+    }
+  }
   if (service === "ssm" && has("--with-decryption")) {
     return { decision: "deny", reason: "Decrypting SSM parameters is blocked" };
   }
-  if (profile && /prod/i.test(profile)) {
+  if (profile && config.blockedProfile.test(profile)) {
     return { decision: "deny", reason: "Prod profiles are off-limits from Claude Code" };
   }
   if (!profile) {
     return { decision: "deny", reason: "Add --profile <sandbox-profile> (and --region)" };
   }
   if (/^(describe|list|get|head|lookup|batch-get)-/.test(op)) {
+    if (!config.requireQuery) {
+      return { decision: "allow", reason: "Read-only aws call (--query not required by configuration)" };
+    }
     const q = query?.trim();
     if (!q) {
       return {
@@ -155,7 +219,7 @@ try {
   const cmd = input.tool_input?.command ?? "";
   if (typeof cmd !== "string")
     throw new Error("tool_input.command is not a string");
-  result = evaluate(cmd);
+  result = evaluate(cmd, loadConfig(process.env));
   if (result.decision !== "passthrough") {
     console.error(JSON.stringify({ ts: new Date().toISOString(), ...result, cmd }));
   }

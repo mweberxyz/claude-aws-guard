@@ -11,8 +11,9 @@ const HOOKS = join(ROOT, "plugins", "aws-guard", "hooks", "hooks.json");
 const EXAMPLE_SETTINGS = join(ROOT, "examples", "settings.json");
 
 // Runs the script the way Claude Code does: JSON on stdin, decision on stdout, audit line on stderr.
-async function run(stdin: string, argv: string[] = ["bun", "run", SCRIPT]) {
+async function run(stdin: string, argv: string[] = ["bun", "run", SCRIPT], env: Record<string, string> = {}) {
   const proc = Bun.spawn(argv, {
+    env: { ...process.env, ...env },
     stdin: new Blob([stdin]),
     stdout: "pipe",
     stderr: "pipe",
@@ -80,6 +81,43 @@ describe("decisions", () => {
   test("output shape", async () => {
     const r = await hook(`${P} s3 ls`);
     expect(r.out.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+  });
+});
+
+describe("configuration from CLAUDE_PLUGIN_OPTION_* variables", () => {
+  const withEnv = (command: string, env: Record<string, string>) =>
+    run(JSON.stringify({ tool_input: { command } }), ["bun", "run", SCRIPT], env);
+
+  test("blocked profile pattern", async () => {
+    const env = { CLAUDE_PLUGIN_OPTION_BLOCKED_PROFILE_PATTERN: "^live-" };
+    expect((await withEnv(`${P} s3 ls`.replace("sandbox", "live-main"), env)).decision).toBe("deny");
+    expect((await withEnv("aws --profile prod s3 ls", env)).decision).toBe("allow");
+  });
+
+  test("extra denied commands and require_query", async () => {
+    const r = await withEnv(`${P} rds describe-db-instances --query Foo`, {
+      CLAUDE_PLUGIN_OPTION_EXTRA_DENIED_COMMANDS: "rds",
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("blocked by configuration");
+    const q = await withEnv(`${P} ec2 describe-instances`, { CLAUDE_PLUGIN_OPTION_REQUIRE_QUERY: "false" });
+    expect(q.decision).toBe("allow");
+  });
+
+  test("environment profile", async () => {
+    const env = { CLAUDE_PLUGIN_OPTION_USE_ENVIRONMENT_PROFILE: "true", AWS_PROFILE: "dev" };
+    expect((await withEnv("aws s3 ls", env)).decision).toBe("allow");
+    expect((await withEnv("aws s3 ls", { AWS_PROFILE: "dev" })).decision).toBe("deny");
+  });
+
+  test("a bad setting denies aws calls but leaves other commands alone", async () => {
+    const env = { CLAUDE_PLUGIN_OPTION_BLOCKED_PROFILE_PATTERN: "(" };
+    const a = await withEnv(`${P} s3 ls`, env);
+    expect(a.decision).toBe("deny");
+    expect(a.reason).toContain("configuration error");
+    const ls = await withEnv("ls -la", env);
+    expect(ls.out).toBeNull();
+    expect(ls.exitCode).toBe(0);
   });
 });
 

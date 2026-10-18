@@ -10,5 +10,37 @@
   "homepage": "https://github.com/mweberxyz/claude-aws-guard",
   "repository": "https://github.com/mweberxyz/claude-aws-guard",
   "license": "MIT",
-  "keywords": ["aws", "aws-cli", "hook", "pretooluse", "guardrails", "security"]
+  "keywords": [
+    "aws",
+    "aws-cli",
+    "hook",
+    "pretooluse",
+    "guardrails",
+    "security"
+  ],
+  "userConfig": {
+    "blocked_profile_pattern": {
+      "type": "string",
+      "title": "Blocked profile pattern",
+      "description": "Case-insensitive regular expression. Calls using an AWS profile whose name matches are always denied. Leave empty for the default, \"prod\".",
+      "default": "prod"
+    },
+    "extra_denied_commands": {
+      "type": "string",
+      "title": "Extra denied commands",
+      "description": "Comma-separated commands to always deny, written as service or service:operation-prefix (for example rds,ec2:terminate-). Leave empty for none."
+    },
+    "require_query": {
+      "type": "boolean",
+      "title": "Require --query on read calls",
+      "description": "Deny describe-/list-/get-/head-/lookup-/batch-get- calls that have no --query, or whose --query selects everything.",
+      "default": true
+    },
+    "use_environment_profile": {
+      "type": "boolean",
+      "title": "Use the AWS_PROFILE environment variable",
+      "description": "Treat AWS_PROFILE from Claude Code's environment as the profile when a call names none. Off by default, so every call must name its profile.",
+      "default": false
+    }
+  }
 }

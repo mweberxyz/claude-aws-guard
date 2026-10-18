@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { evaluate, parseAws, shellSplit, type Verdict } from "../plugins/aws-guard/src/aws_guard_lib";
+import { evaluate, loadConfig, parseAws, shellSplit, type Config, type Verdict } from "../plugins/aws-guard/src/aws_guard_lib";
 
 const reasonOf = (v: Verdict) => ("reason" in v ? v.reason : undefined);
 
@@ -265,5 +265,129 @@ describe("evaluate", () => {
     expect(reasonOf(evaluate("aws --profile d ec2 run-instances"))).toBe(
       "Mutating or unrecognized: aws ec2 run-instances",
     );
+  });
+});
+
+describe("loadConfig", () => {
+  const opt = (o: Record<string, string>) =>
+    Object.fromEntries(Object.entries(o).map(([k, v]) => [`CLAUDE_PLUGIN_OPTION_${k}`, v]));
+  const ok = (env: Record<string, string | undefined>) => {
+    const c = loadConfig(env);
+    if ("error" in c) throw new Error(c.error);
+    return c;
+  };
+
+  test("no options gives the defaults", () => {
+    const c = ok({});
+    expect(c.blockedProfile.test("PROD-admin")).toBe(true);
+    expect(c.blockedProfile.test("sandbox")).toBe(false);
+    expect(c.extraDenied).toEqual([]);
+    expect(c.requireQuery).toBe(true);
+    expect(c.envProfile).toBeUndefined();
+  });
+
+  test("an empty or blank pattern falls back to prod, never to match-everything", () => {
+    for (const v of ["", "   "]) {
+      const c = ok(opt({ BLOCKED_PROFILE_PATTERN: v }));
+      expect(c.blockedProfile.test("sandbox")).toBe(false);
+      expect(c.blockedProfile.test("prod")).toBe(true);
+    }
+  });
+
+  test("custom pattern is case-insensitive", () => {
+    const c = ok(opt({ BLOCKED_PROFILE_PATTERN: "^(live|prd)-" }));
+    expect(c.blockedProfile.test("LIVE-main")).toBe(true);
+    expect(c.blockedProfile.test("prod")).toBe(false);
+  });
+
+  test("invalid regular expression is an error", () => {
+    const c = loadConfig(opt({ BLOCKED_PROFILE_PATTERN: "(" }));
+    expect("error" in c && c.error).toContain("blocked_profile_pattern");
+  });
+
+  test("extra_denied_commands parses service and service:prefix, ignoring blanks", () => {
+    const c = ok(opt({ EXTRA_DENIED_COMMANDS: " rds , ec2:terminate- ,, " }));
+    expect(c.extraDenied.map(([svc, re]) => [svc, re.test("terminate-instances"), re.test("describe-instances")])).toEqual([
+      ["rds", true, true],
+      ["ec2", true, false],
+    ]);
+  });
+
+  test.each(["RDS", "ec2:", "a b", "ec2:terminate.*", "ec2:a:b"])("extra_denied_commands entry %p is an error", (entry) => {
+    const c = loadConfig(opt({ EXTRA_DENIED_COMMANDS: entry }));
+    expect("error" in c && c.error).toContain("extra_denied_commands");
+  });
+
+  test.each([["true", true], ["TRUE", true], ["1", true], ["yes", true], ["false", false], ["0", false], ["No", false], ["", true]])(
+    "require_query %p",
+    (raw, expected) => {
+      expect(ok(opt({ REQUIRE_QUERY: raw })).requireQuery).toBe(expected);
+    },
+  );
+
+  test("an unrecognized boolean is an error, not a default", () => {
+    for (const key of ["REQUIRE_QUERY", "USE_ENVIRONMENT_PROFILE"]) {
+      const c = loadConfig(opt({ [key]: "maybe" }));
+      expect("error" in c && c.error).toContain("must be true or false");
+    }
+  });
+
+  test("AWS_PROFILE is only read when use_environment_profile is on", () => {
+    expect(ok({ AWS_PROFILE: "dev" }).envProfile).toBeUndefined();
+    expect(ok({ AWS_PROFILE: "dev", ...opt({ USE_ENVIRONMENT_PROFILE: "true" }) }).envProfile).toBe("dev");
+    expect(ok({ AWS_PROFILE: "  ", ...opt({ USE_ENVIRONMENT_PROFILE: "true" }) }).envProfile).toBeUndefined();
+  });
+});
+
+describe("evaluate with configuration", () => {
+  const cfg = (over: Partial<Config>): Config => ({
+    blockedProfile: /prod/i,
+    extraDenied: [],
+    requireQuery: true,
+    envProfile: undefined,
+    ...over,
+  });
+
+  test("a custom blocked pattern replaces the default", () => {
+    const c = cfg({ blockedProfile: /^live-/i });
+    expect(evaluate("aws --profile live-main s3 ls", c).decision).toBe("deny");
+    expect(evaluate("aws --profile prod s3 ls", c).decision).toBe("allow");
+  });
+
+  test("extra denied commands", () => {
+    const c = cfg({ extraDenied: [["rds", /^/], ["ec2", /^terminate-/]] });
+    expect(reasonOf(evaluate("aws --profile d rds describe-db-instances --query Foo", c))).toBe(
+      "aws rds describe-db-instances is blocked by configuration",
+    );
+    expect(evaluate("aws --profile d ec2 terminate-instances --dry-run", c).decision).toBe("deny");
+    expect(evaluate("aws --profile d ec2 describe-instances --query Foo", c).decision).toBe("allow");
+  });
+
+  test("require_query off allows reads with no or wildcard query, but still needs a profile", () => {
+    const c = cfg({ requireQuery: false });
+    expect(evaluate("aws --profile d ec2 describe-instances", c).decision).toBe("allow");
+    expect(evaluate("aws --profile d ec2 describe-instances --query @", c).decision).toBe("allow");
+    expect(evaluate("aws ec2 describe-instances", c).decision).toBe("deny");
+  });
+
+  test("the environment profile fills in a missing profile and is still checked", () => {
+    expect(evaluate("aws s3 ls", cfg({ envProfile: "dev" })).decision).toBe("allow");
+    expect(evaluate("aws s3 ls", cfg({ envProfile: "prod" })).decision).toBe("deny");
+    expect(evaluate("aws --profile other s3 ls", cfg({ envProfile: "prod" })).decision).toBe("allow");
+  });
+
+  test("hard denies cannot be configured away", () => {
+    const c = cfg({ requireQuery: false, blockedProfile: /^never$/ });
+    expect(evaluate("aws --profile d iam delete-user", c).decision).toBe("deny");
+    expect(evaluate("aws --profile d organizations list-accounts", c).decision).toBe("deny");
+  });
+
+  test("a configuration error denies aws calls with the reason, and never touches other commands", () => {
+    const bad = { error: "boom" };
+    expect(evaluate("aws --profile d s3 ls", bad)).toEqual({
+      decision: "deny",
+      reason: "aws-guard configuration error: boom",
+    });
+    expect(evaluate("ls -la", bad)).toEqual({ decision: "passthrough" });
   });
 });

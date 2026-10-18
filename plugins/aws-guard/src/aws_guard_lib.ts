@@ -59,6 +59,70 @@ const DENY: [string, RegExp][] = [
   ["configure", /.*/],
 ];
 
+// Settings a user can change through the plugin's userConfig. Claude Code hands them to the hook as
+// CLAUDE_PLUGIN_OPTION_<KEY> environment variables.
+export type Config = {
+  blockedProfile: RegExp; // profiles matching this are always denied
+  extraDenied: [string, RegExp][]; // extra [service, operation] pairs to always deny
+  requireQuery: boolean; // read-only verbs need a narrowing --query
+  envProfile: string | undefined; // AWS_PROFILE from the environment, when use_environment_profile is on
+};
+
+export const DEFAULT_CONFIG: Config = {
+  blockedProfile: /prod/i,
+  extraDenied: [],
+  requireQuery: true,
+  envProfile: undefined,
+};
+
+function parseBool(raw: string | undefined, fallback: boolean, name: string): boolean | { error: string } {
+  const v = raw?.trim().toLowerCase();
+  if (!v) return fallback;
+  if (["true", "1", "yes"].includes(v)) return true;
+  if (["false", "0", "no"].includes(v)) return false;
+  return { error: `${name} must be true or false, got '${raw}'` };
+}
+
+// Builds a Config from the environment. Anything unparseable is an error, never a silent default,
+// so a typo can't quietly loosen the policy.
+export function loadConfig(env: Record<string, string | undefined>): Config | { error: string } {
+  const opt = (key: string) => env[`CLAUDE_PLUGIN_OPTION_${key}`];
+
+  let blockedProfile = DEFAULT_CONFIG.blockedProfile;
+  const pattern = opt("BLOCKED_PROFILE_PATTERN")?.trim();
+  if (pattern) {
+    try {
+      blockedProfile = new RegExp(pattern, "i");
+    } catch (e) {
+      return { error: `blocked_profile_pattern is not a valid regular expression: ${e}` };
+    }
+  }
+
+  const extraDenied: [string, RegExp][] = [];
+  for (const raw of (opt("EXTRA_DENIED_COMMANDS") ?? "").split(",")) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const [service, ...rest] = entry.split(":");
+    const prefix = rest.join(":");
+    if (!/^[a-z0-9-]+$/.test(service) || (rest.length > 0 && !/^[a-z0-9-]+$/.test(prefix))) {
+      return { error: `extra_denied_commands entry '${entry}' must look like 'service' or 'service:operation-prefix'` };
+    }
+    extraDenied.push([service, new RegExp(`^${prefix}`)]);
+  }
+
+  const requireQuery = parseBool(opt("REQUIRE_QUERY"), DEFAULT_CONFIG.requireQuery, "require_query");
+  if (typeof requireQuery === "object") return requireQuery;
+  const useEnvProfile = parseBool(opt("USE_ENVIRONMENT_PROFILE"), false, "use_environment_profile");
+  if (typeof useEnvProfile === "object") return useEnvProfile;
+
+  return {
+    blockedProfile,
+    extraDenied,
+    requireQuery,
+    envProfile: useEnvProfile ? env.AWS_PROFILE?.trim() || undefined : undefined,
+  };
+}
+
 export type ParsedAws = {
   service: string;
   op: string;
@@ -101,10 +165,15 @@ export function parseAws(cmd: string): ParsedAws | { error: string } {
   return { service, op, profile, query, has };
 }
 
-export function evaluate(cmd: string): Verdict {
+export function evaluate(cmd: string, config: Config | { error: string } = DEFAULT_CONFIG): Verdict {
   // Not an aws call? Stay out of the way. A path prefix (/usr/local/bin/aws, ./aws, ~/bin/aws)
   // or a quote ("aws") still counts as an aws call; parseAws sends path-prefixed ones to ask.
   if (!/(^|[\s;&|(`'"/])aws(['"\s]|$)/.test(cmd)) return { decision: "passthrough" };
+
+  // A broken configuration only matters for aws calls: it must never block other commands.
+  if ("error" in config) {
+    return { decision: "deny", reason: `aws-guard configuration error: ${config.error}` };
+  }
 
   // 1. Compound / indirect commands: can't reason about them, so ask.
   if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
@@ -113,7 +182,8 @@ export function evaluate(cmd: string): Verdict {
 
   const parsed = parseAws(cmd);
   if ("error" in parsed) return { decision: "ask", reason: parsed.error };
-  const { service, op, profile, query, has } = parsed;
+  const { service, op, query, has } = parsed;
+  const profile = parsed.profile ?? config.envProfile;
 
   // 2. Hard denies
   for (const [svc, pat] of DENY) {
@@ -121,10 +191,15 @@ export function evaluate(cmd: string): Verdict {
       return { decision: "deny", reason: `aws ${service} ${op} is blocked by policy` };
     }
   }
+  for (const [svc, pat] of config.extraDenied) {
+    if (service === svc && pat.test(op)) {
+      return { decision: "deny", reason: `aws ${service} ${op} is blocked by configuration` };
+    }
+  }
   if (service === "ssm" && has("--with-decryption")) {
     return { decision: "deny", reason: "Decrypting SSM parameters is blocked" };
   }
-  if (profile && /prod/i.test(profile)) {
+  if (profile && config.blockedProfile.test(profile)) {
     return { decision: "deny", reason: "Prod profiles are off-limits from Claude Code" };
   }
 
@@ -137,6 +212,9 @@ export function evaluate(cmd: string): Verdict {
   //    so the caller has to decide what it needs instead of pulling everything.
   //    (`aws s3 ls` doesn't support --query, so it's exempt.)
   if (/^(describe|list|get|head|lookup|batch-get)-/.test(op)) {
+    if (!config.requireQuery) {
+      return { decision: "allow", reason: "Read-only aws call (--query not required by configuration)" };
+    }
     const q = query?.trim();
     if (!q) {
       return {

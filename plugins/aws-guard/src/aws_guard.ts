@@ -10,7 +10,7 @@
 //   - fail-closed crashes: a non-zero exit from this script becomes exit 2 (block).
 // Run bare, a crash outside the try/catch below would fail open.
 
-import { evaluate, type Verdict } from "./aws_guard_lib";
+import { evaluate, loadConfig, type Verdict } from "./aws_guard_lib";
 
 export {}; // marks this file as a module so tsc accepts the top-level await
 
@@ -25,7 +25,7 @@ try {
   const input = JSON.parse(await readStdin()) as { tool_input?: { command?: string } };
   const cmd = input.tool_input?.command ?? "";
   if (typeof cmd !== "string") throw new Error("tool_input.command is not a string");
-  result = evaluate(cmd);
+  result = evaluate(cmd, loadConfig(process.env));
   // One audit line per aws call; the wrapper in hooks.json appends stderr to the log file.
   if (result.decision !== "passthrough") {
     console.error(JSON.stringify({ ts: new Date().toISOString(), ...result, cmd }));
