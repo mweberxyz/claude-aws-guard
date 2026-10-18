@@ -175,6 +175,7 @@ let result: Verdict;
 try {
   const input = (await Bun.stdin.json()) as { tool_input?: { command?: string } };
   const cmd = input.tool_input?.command ?? "";
+  if (typeof cmd !== "string") throw new Error("tool_input.command is not a string");
   result = evaluate(cmd);
   // One audit line per aws call; the wrapper in settings.json appends stderr to the log file.
   if (result.decision !== "passthrough") {
