@@ -4,7 +4,7 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws_guard.py" }
+          { "type": "command", "command": "bun run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws_guard.ts" }
         ]
       }
     ]
