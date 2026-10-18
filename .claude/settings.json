@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws_guard.ts",
+            "command": "bun run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws_guard.ts || { echo 'aws_guard crashed' >&2; exit 2; }",
             "timeout": 10
           }
         ]
