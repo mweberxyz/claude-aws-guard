@@ -3,8 +3,11 @@ import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SCRIPT = join(import.meta.dir, "aws_guard.ts");
-const SETTINGS = join(import.meta.dir, "..", "..", "settings.json");
+const ROOT = join(import.meta.dir, "..");
+const PLUGIN = join(ROOT, "plugins", "aws-guard");
+const SCRIPT = join(PLUGIN, "src", "aws_guard.ts");
+const HOOKS = join(ROOT, "plugins", "aws-guard", "hooks", "hooks.json");
+const EXAMPLE_SETTINGS = join(ROOT, "examples", "settings.json");
 
 // Runs the script the way Claude Code does: JSON on stdin, decision on stdout, audit line on stderr.
 async function run(stdin: string) {
@@ -106,17 +109,17 @@ describe("audit log", () => {
   });
 });
 
-// Exercises the exact command string from settings.json, so the shell wrapper is covered too.
-describe("settings.json wrapper", () => {
-  const settings = JSON.parse(readFileSync(SETTINGS, "utf8"));
-  const hookCfg = settings.hooks.PreToolUse[0].hooks[0];
+// Exercises the exact command string from hooks.json, so the shell wrapper is covered too.
+describe("hooks.json wrapper", () => {
+  const hooks = JSON.parse(readFileSync(HOOKS, "utf8"));
+  const hookCfg = hooks.hooks.PreToolUse[0].hooks[0];
 
   async function wrapper(home: string, command: string) {
     const proc = Bun.spawn(["sh", "-c", hookCfg.command], {
       stdin: new Blob([JSON.stringify({ tool_input: { command } })]),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HOME: home, CLAUDE_PROJECT_DIR: join(import.meta.dir, "..", "..", "..") },
+      env: { ...process.env, HOME: home, CLAUDE_PLUGIN_ROOT: PLUGIN },
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -127,7 +130,7 @@ describe("settings.json wrapper", () => {
   }
 
   test("registration: Bash matcher, timeout, onFailure block", () => {
-    expect(settings.hooks.PreToolUse[0].matcher).toBe("Bash");
+    expect(hooks.hooks.PreToolUse[0].matcher).toBe("Bash");
     expect(hookCfg.timeout).toBe(10);
     expect(hookCfg.onFailure).toBe("block");
   });
@@ -149,7 +152,8 @@ describe("settings.json wrapper", () => {
     expect(r.stderr).toContain("aws_guard failed");
   });
 
-  test("permissions.deny lists the hard-deny commands", () => {
+  test("examples/settings.json lists the hard-deny commands", () => {
+    const settings = JSON.parse(readFileSync(EXAMPLE_SETTINGS, "utf8"));
     expect(settings.permissions.deny).toEqual(
       expect.arrayContaining([
         "Bash(aws iam:*)",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { evaluate, parseAws, shellSplit } from "./aws_guard_lib";
+import { evaluate, parseAws, shellSplit } from "../plugins/aws-guard/src/aws_guard_lib";
 
 const P = "aws --profile sandbox";
 

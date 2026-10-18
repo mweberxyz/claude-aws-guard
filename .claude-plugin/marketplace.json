@@ -1,0 +1,15 @@
+{
+  "name": "aws-guard",
+  "description": "Claude Code plugins for working safely with the AWS CLI",
+  "owner": {
+    "name": "mweberxyz",
+    "url": "https://github.com/mweberxyz"
+  },
+  "plugins": [
+    {
+      "name": "aws-guard",
+      "source": "./plugins/aws-guard",
+      "description": "PreToolUse hook that allows, denies or asks on aws CLI calls made through the Bash tool"
+    }
+  ]
+}
