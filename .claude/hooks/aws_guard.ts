@@ -170,15 +170,15 @@ try {
   result = { decision: "deny", reason: `aws_guard script failed: ${e}` };
 }
 
-// passthrough prints nothing, so the normal permission flow applies.
-if (result.decision !== "passthrough") {
-  console.log(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: result.decision,
-        permissionDecisionReason: result.reason,
-      },
-    }),
-  );
-}
+// Exit 0 with no output means "no opinion": Claude Code falls back to its normal permission flow.
+if (result.decision === "passthrough") process.exit(0);
+
+console.log(
+  JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: result.decision,
+      permissionDecisionReason: result.reason,
+    },
+  }),
+);
