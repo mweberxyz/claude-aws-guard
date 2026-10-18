@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 // PreToolUse hook: guard `aws` CLI calls made through Claude Code's Bash tool.
-// Emits allow / deny / ask. Anything unrecognized falls through to "ask".
-// Fails closed: if the hook itself breaks (bad input, logging failure, bug),
-// it returns a deny that says so, instead of crashing into a non-blocking error.
+// Single-shot script: reads one tool call from stdin, prints one decision, exits.
+// Fails closed: any unexpected error (bad input, logging failure, bug) becomes a deny.
 
 import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -11,8 +10,9 @@ import { join } from "node:path";
 type Decision = "allow" | "deny" | "ask";
 
 const AUDIT_LOG = join(homedir(), ".claude", "aws-audit.log");
+let cmd = "";
 
-function emit(decision: Decision, reason: string): never {
+function respond(decision: Decision, reason: string): never {
   console.log(
     JSON.stringify({
       hookSpecificOutput: {
@@ -25,22 +25,17 @@ function emit(decision: Decision, reason: string): never {
   process.exit(0);
 }
 
-// Logs, then emits. The audit log is part of the control: if it can't be
-// written, the call is denied rather than going through unrecorded.
-function decide(cmd: string, decision: Decision, reason: string): never {
+// Logs, then responds. If the audit log can't be written, deny instead.
+function decide(decision: Decision, reason: string): never {
   try {
     appendFileSync(
       AUDIT_LOG,
       JSON.stringify({ ts: new Date().toISOString(), decision, reason, cmd }) + "\n",
     );
   } catch (e) {
-    emit("deny", `aws_guard failed to write audit log (${AUDIT_LOG}): ${errMsg(e)}`);
+    respond("deny", `aws_guard failed to write audit log (${AUDIT_LOG}): ${e}`);
   }
-  emit(decision, reason);
-}
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  respond(decision, reason);
 }
 
 // Minimal shlex.split: handles single quotes, double quotes, backslash escapes.
@@ -98,24 +93,23 @@ const DENY: [string, RegExp][] = [
   ["configure", /.*/],
 ];
 
-async function main(): Promise<void> {
+try {
   const input = (await Bun.stdin.json()) as { tool_input?: { command?: string } };
-  const cmd = input.tool_input?.command ?? "";
-  const d = (decision: Decision, reason: string): never => decide(cmd, decision, reason);
+  cmd = input.tool_input?.command ?? "";
 
   // Not an aws call? Stay out of the way (no output = normal permission flow).
   if (!/(^|[\s;&|(`])aws(\s|$)/.test(cmd)) process.exit(0);
 
   // 1. Compound / indirect commands: can't reason about them, so ask.
   if (/[;&|`\n]|\$\(|\beval\b|\bbash\s+-c\b|\bxargs\b/.test(cmd)) {
-    d("ask", "aws inside a compound or indirect command");
+    decide("ask", "aws inside a compound or indirect command");
   }
 
   let argv: string[];
   try {
     argv = shellSplit(cmd);
   } catch {
-    return d("ask", "Unparseable command");
+    decide("ask", "Unparseable command");
   }
 
   // Strip leading VAR=value assignments (e.g. AWS_PROFILE=sandbox aws ...).
@@ -124,7 +118,7 @@ async function main(): Promise<void> {
     const [k, ...v] = argv.shift()!.split("=");
     env[k] = v.join("=");
   }
-  if (argv[0] !== "aws") d("ask", "aws is not the command being run directly");
+  if (argv[0] !== "aws") decide("ask", "aws is not the command being run directly");
   argv = argv.slice(1);
 
   const positional: string[] = [];
@@ -147,17 +141,17 @@ async function main(): Promise<void> {
 
   // 2. Hard denies
   for (const [svc, pat] of DENY) {
-    if (service === svc && pat.test(op)) d("deny", `aws ${service} ${op} is blocked by policy`);
+    if (service === svc && pat.test(op)) decide("deny", `aws ${service} ${op} is blocked by policy`);
   }
   if (service === "ssm" && has("--with-decryption")) {
-    d("deny", "Decrypting SSM parameters is blocked");
+    decide("deny", "Decrypting SSM parameters is blocked");
   }
   if (profile && /prod/i.test(profile)) {
-    d("deny", "Prod profiles are off-limits from Claude Code");
+    decide("deny", "Prod profiles are off-limits from Claude Code");
   }
 
   // 3. Require explicit identity so we never hit a default/prod account.
-  if (!profile) d("deny", "Add --profile <sandbox-profile> (and --region)");
+  if (!profile) decide("deny", "Add --profile <sandbox-profile> (and --region)");
 
   // 4. Read-only verbs: require a --query that actually narrows the output,
   //    so the caller has to decide what it needs instead of pulling everything.
@@ -165,7 +159,7 @@ async function main(): Promise<void> {
   if (/^(describe|list|get|head|lookup|batch-get)-/.test(op)) {
     const q = query?.trim();
     if (!q) {
-      d(
+      decide(
         "deny",
         "Read calls need --query selecting only the fields you need " +
           "(e.g. --query 'Reservations[].Instances[].[InstanceId,State.Name]')",
@@ -173,16 +167,15 @@ async function main(): Promise<void> {
     }
     // "@" (JMESPath identity) and bare wildcards return everything: not a real narrowing.
     if (/^(@|\*|\[\*\]|\[\]|\*\.\*)$/.test(q!)) {
-      d("deny", `--query '${q}' selects everything; choose specific fields`);
+      decide("deny", `--query '${q}' selects everything; choose specific fields`);
     }
-    d("allow", "Read-only aws call with a narrowing --query");
+    decide("allow", "Read-only aws call with a narrowing --query");
   }
-  if (service === "s3" && op === "ls") d("allow", "Read-only aws call");
-  if (has("--dry-run")) d("allow", "Dry run");
+  if (service === "s3" && op === "ls") decide("allow", "Read-only aws call");
+  if (has("--dry-run")) decide("allow", "Dry run");
 
   // 5. Everything else (create/update/delete/s3 cp/rm/sync...) -> human decides.
-  d("ask", `Mutating or unrecognized: aws ${service} ${op}`);
+  decide("ask", `Mutating or unrecognized: aws ${service} ${op}`);
+} catch (e) {
+  respond("deny", `aws_guard script failed: ${e}`);
 }
-
-// Any unexpected failure (malformed stdin, a bug above) becomes an explicit deny.
-main().catch((e) => emit("deny", `aws_guard script failed: ${errMsg(e)}`));
