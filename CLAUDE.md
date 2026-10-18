@@ -1,50 +1,67 @@
-# .claude/hooks/aws-guard
+# claude-aws-guard
 
-Holds `aws_guard`, a PreToolUse hook that guards `aws` CLI calls made through Claude Code's Bash tool. It runs on Bun (TypeScript).
+A Claude Code plugin (`aws-guard`) containing a PreToolUse hook that guards `aws` CLI calls made through the Bash tool. Written in TypeScript, developed and tested with Bun, shipped as a built file that runs on Bun or Node.
 
-## Files
+## Layout
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `aws_guard.ts` | Entry point. Reads the tool call as JSON on stdin, prints one decision, exits. Owns all I/O: the audit line on stderr, the fail-closed `catch`. |
-| `aws_guard_lib.ts` | Pure policy logic (`shellSplit`, `parseAws`, `evaluate`). No I/O, so it can be unit tested in-process. |
-| `aws_guard_lib.test.ts` | In-process tests. Owns the full policy matrix and the parser edge cases. |
-| `aws_guard.test.ts` | Subprocess tests. A small smoke set plus passthrough, fail-closed, audit-log and `settings.json` wrapper checks. |
-| `benchmarking.md` | Latency measurements and how to reproduce them. |
+| `plugins/aws-guard/src/aws_guard.ts` | Entry point. Reads the tool call as JSON on fd 0, prints one decision, exits. Owns all I/O: stdin, the audit line on stderr, the fail-closed `catch`. |
+| `plugins/aws-guard/src/aws_guard_lib.ts` | Pure policy logic (`shellSplit`, `parseAws`, `loadConfig`, `evaluate`). No I/O, so it is unit tested in-process. |
+| `plugins/aws-guard/dist/aws_guard.mjs` | The built file the plugin actually runs. **Committed.** Rebuild after any change under `src/`. |
+| `plugins/aws-guard/hooks/hooks.json` | Hook registration and the shell wrapper command. |
+| `plugins/aws-guard/.claude-plugin/plugin.json` | Plugin manifest, including the `userConfig` options. |
+| `.claude-plugin/marketplace.json` | Marketplace listing for the plugin. |
+| `examples/settings.json` | Manual-install settings plus the `permissions.deny` second layer (a plugin can't ship those). |
+| `test/aws_guard_lib.test.ts` | In-process tests. Owns the full policy matrix, the parser and the config. |
+| `test/aws_guard.test.ts` | Subprocess tests: a small smoke set, config through env vars, stdin handling, the built file under Node, fail-closed, audit log, the `hooks.json` wrapper. |
+| `scripts/bench.ts` | Latency benchmark. Results in `docs/benchmarking.md`. |
+| `docs/hardening.md` | How to stop Claude changing the hook. Not applied by default. |
+| `SECURITY.md`, `CHANGELOG.md`, `README.md` | Public docs. |
 
-The hook is registered in `../../settings.json`, which also holds a second layer of `permissions.deny` entries.
+This `CLAUDE.md` is deliberately at the repo root, outside `plugins/aws-guard/`: a `CLAUDE.md` inside a plugin isn't loaded as context and `claude plugin validate` warns about it.
 
 ## Commands
 
 ```sh
-cd /home/user/.claude/hooks/aws-guard
+bun install
+bun run typecheck         # tsc --strict
 bun test                  # all tests
-bun test --coverage       # coverage covers aws_guard_lib.ts only
+bun test --coverage       # coverage covers the lib only
+bun run build             # rebuild dist/ (use Bun 1.4.2: CI pins it)
+bun run check-dist        # fail if dist/ differs from a fresh build
+bun run validate          # claude plugin validate, plugin and marketplace
+bun run bench             # latency
 ```
 
-Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the tests. Keep it at 100% function and line coverage for the lib.
+Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the tests. Keep the lib at 100% function and line coverage.
 
 ## Rules to preserve
 
-- **Fail closed.** Any error inside the script becomes a deny. The `settings.json` wrapper turns a crash into exit 2 and sets `"onFailure": "block"` so timeouts and other hook failures block the call too. Don't weaken either.
+- **Fail closed.** Any error inside the script becomes a deny. The `hooks.json` wrapper turns a crash into exit 2 and sets `"onFailure": "block"`, so timeouts and other hook failures block too. Don't weaken either.
 - **Non-`aws` commands pass through** with no output, exit 0 and no audit line. There is no `passthrough` value for `permissionDecision`; silence is how it is expressed.
 - **The audit log is written by the shell**, not the script. The script writes one JSON line per `aws` call to stderr (`ts`, `decision`, `reason`, `cmd`), and the wrapper appends stderr to `~/.claude/aws-audit.log`. If that file can't be opened, the wrapper blocks the call.
+- **Configuration fails closed too.** Anything in `loadConfig` that can't be parsed is an error, never a default. A config error denies `aws` calls only and must never affect other commands. The built-in hard denies and the explicit-profile requirement cannot be configured away.
 - **Keep `aws_guard_lib.ts` free of I/O**, and keep `aws_guard.ts` thin.
-- **Decision order in `evaluate()` matters:** compound/indirect commands ask, then hard denies, then prod profile, then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
+- **Keep startup cheap.** The hook runs before every Bash call. Don't read stdin through `process.stdin` (about 17 ms extra on Bun) and don't add imports with heavy startup. Re-run `bun run bench` if you change how the script starts.
+- **Runtime preference is Bun, then Node.** Bun starts about four times faster. The hook must keep working on Node, and the tests run the built file under Node.
+- **Decision order in `evaluate()` matters:** configuration error, then compound/indirect commands ask, then hard denies (built-in, then configured), then the blocked-profile pattern, then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
 
 ## When changing a rule
 
-1. Change `aws_guard_lib.ts`.
-2. Add or update the row in the policy table in `aws_guard_lib.test.ts`.
-3. Update the `permissions.deny` entries in `../../settings.json` if it is a hard deny, since they duplicate the script's denies on purpose.
-4. Only touch the smoke set in `aws_guard.test.ts` if a decision type or the I/O path changed.
-5. Run `bun test --coverage`.
+1. Change `plugins/aws-guard/src/aws_guard_lib.ts`.
+2. Add or update the row in the policy table in `test/aws_guard_lib.test.ts`.
+3. Update `permissions.deny` in `examples/settings.json` and in the README if it is a hard deny, since they duplicate the script's denies on purpose.
+4. Only touch the smoke set in `test/aws_guard.test.ts` if a decision type or the I/O path changed.
+5. `bun run build`, then `bun run typecheck && bun test --coverage && bun run validate`.
+6. Update `README.md` and `CHANGELOG.md` if behavior or options changed.
 
 ## Known limits
 
-- The hook only sees the Bash command string. A script that calls AWS through boto3 or another SDK bypasses it, so the profile should also be backed by a read-only IAM role or SSO permission set.
-- `aws` after a `/` or a quote counts as an aws call. Path-prefixed calls (`/usr/local/bin/aws`) go to `ask`, and so does any command ending in `/aws` such as `ls /var/aws`.
-- The wrapper's `2>>` redirect and `||` assume a POSIX shell. It won't work as written on Windows without Git Bash or WSL.
-- `bun` must be on the PATH. If it isn't, every Bash call is blocked, not just `aws` ones.
-- The design relies on Claude Code's hook semantics (exit 2 blocks, `permissionDecision` is `allow`/`deny`/`ask`, `timeout` in seconds, `onFailure`). These were checked against the hooks docs. Inside Claude Code, deny (reason shown to Claude), allow and hook-failure blocking have been observed working; how an `ask` prompts an interactive user has not been observed.
-- `onFailure` needs Claude Code v2.1.295 or later.
+See "What it doesn't protect against" in the README and `SECURITY.md`. The ones that matter when editing:
+
+- The hook only sees the Bash command string.
+- Anything mentioning `aws` after whitespace, a quote or a `/` is treated as an `aws` call, so unrelated compound commands that merely contain the word get an `ask` and an audit line. That is intentional.
+- The wrapper's `2>>` redirect and `||` assume a POSIX shell.
+- Verified against the hooks docs: exit 2 blocks, other non-zero exits don't (hence `onFailure`), `permissionDecision` is `allow`/`deny`/`ask`/`defer`, `timeout` is in seconds. Observed working inside Claude Code: deny (reason shown to Claude), allow and hook-failure blocking. **Not yet observed:** how an `ask` prompts an interactive user, and whether plugin hooks honor `onFailure` exactly like settings hooks (`claude plugin validate` accepts it).
+- `onFailure` needs Claude Code 2.1.295 or later.

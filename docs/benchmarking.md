@@ -1,93 +1,62 @@
-# aws_guard benchmarking
+# Benchmarking
 
-Per-call latency of the `aws_guard` PreToolUse hook, measured through the exact command string in `../../settings.json`.
+Per-call latency of the aws-guard hook, measured through the exact command string in `plugins/aws-guard/hooks/hooks.json`.
 
 ## Summary
 
-The hook costs about 8 to 10 ms per Bash call, whatever the decision. Passthrough costs the same as a deny, because starting Bun, loading the two modules and reading stdin is nearly all of the time. Decision logic is negligible.
+With Bun on the `PATH`, the hook costs about 10 to 11 ms per Bash call. With only Node, it costs about 41 to 46 ms. The decision type makes no measurable difference: a passthrough costs the same as a deny, because starting the runtime and loading the script is nearly all of the time. The policy itself is negligible.
+
+The hook command prefers `bun` and falls back to `node`, for this reason.
 
 ## Method
 
 - 40 timed runs per case after 5 warm-up runs, run sequentially.
-- Each run spawns `sh -c "<wrapper from settings.json>"` with the tool-call JSON on stdin, stdout and stderr discarded.
-- `HOME` points at a temporary directory with an empty `.claude/`, so audit lines go to a throwaway log.
-- `CLAUDE_PROJECT_DIR=/home/user`.
+- Each run spawns `sh -c "<command from hooks.json>"` with the tool-call JSON on stdin, stdout and stderr discarded.
+- `HOME` points at a throwaway directory with an empty `.claude/`, so audit lines go to a scratch log.
 - Wall-clock time from spawn to exit, taken with `performance.now()`.
+- The "Node only" run removes Bun from the `PATH`, so the wrapper falls back to `node`.
 
 ## Results
 
-Measured on 2026-10-18 in a cloud container (4 cores, Bun 1.4.2, warm disk). Times in ms.
+Measured on 2026-10-18 in a cloud container (4 cores, Bun 1.4.2, Node 22.22, warm disk). Times in ms.
 
-| Case | mean | p50 | p95 | max |
-|---|---|---|---|---|
-| baseline: `sh -c true` | 1.5 | 1.4 | 2.0 | 2.6 |
-| baseline: `bun -e ''` | 1.9 | 1.9 | 2.3 | 2.4 |
-| passthrough: `ls -la` | 8.2 | 8.1 | 9.4 | 10.0 |
-| passthrough: `git status` | 8.5 | 8.3 | 11.5 | 13.7 |
-| allow: read with query | 8.6 | 8.5 | 10.4 | 11.0 |
-| allow: `s3 ls` | 8.9 | 8.4 | 12.2 | 12.9 |
-| deny: no query | 9.7 | 9.3 | 13.4 | 14.5 |
-| deny: hard deny | 9.0 | 8.9 | 10.7 | 10.9 |
-| deny: no profile | 9.0 | 9.1 | 10.0 | 10.3 |
-| ask: mutation | 9.2 | 8.8 | 14.2 | 14.7 |
-| ask: compound | 8.5 | 8.1 | 13.3 | 14.8 |
-| ask: path-prefixed | 9.6 | 9.8 | 11.8 | 13.2 |
+| Case | Bun on PATH: mean | p50 | p95 | Node only: mean | p50 | p95 |
+|---|---|---|---|---|---|---|
+| baseline: `sh -c true` | 1.3 | 1.3 | 1.4 | 1.3 | 1.3 | 1.5 |
+| baseline: `bun -e ''` | 1.9 | 1.8 | 2.3 | | | |
+| baseline: `node -e ''` | 25.8 | 24.6 | 33.5 | 24.5 | 23.2 | 31.7 |
+| passthrough: `ls -la` | 11.4 | 10.9 | 14.6 | 43.6 | 40.5 | 62.4 |
+| passthrough: `git status` | 10.8 | 10.2 | 14.6 | 41.4 | 39.9 | 50.1 |
+| allow: read with query | 11.7 | 10.9 | 15.3 | 44.3 | 43.4 | 51.0 |
+| allow: `s3 ls` | 10.3 | 10.3 | 10.9 | 46.2 | 44.2 | 59.8 |
+| deny: no query | 10.7 | 10.5 | 11.8 | 45.6 | 45.0 | 54.5 |
+| deny: hard deny | 11.3 | 10.5 | 14.0 | 43.5 | 42.4 | 48.4 |
+| deny: no profile | 10.3 | 10.3 | 10.9 | 43.7 | 42.6 | 56.2 |
+| ask: mutation | 10.7 | 10.2 | 13.8 | 45.0 | 43.8 | 58.9 |
+| ask: compound | 11.5 | 10.7 | 14.7 | 43.9 | 41.6 | 56.2 |
+| ask: path-prefixed | 10.8 | 10.6 | 13.6 | 44.2 | 42.5 | 58.7 |
 
 ## Reading the numbers
 
-- The spread between decision types is about 1.5 ms, within run-to-run noise (p95 varies by more than that).
-- The overhead is about 7 ms over a bare Bun start (1.9 ms): the wrapper shell, loading `aws_guard.ts` and `aws_guard_lib.ts`, `Bun.stdin.json()`, and the audit write.
-- These are lower bounds. A cold disk or a slower machine will be worse.
-- The hook's `timeout` is 10 s, far above anything measured.
+- Bun adds about 9 ms over its own bare start (1.9 ms): the wrapper shell, loading the script, reading stdin and writing the audit line.
+- Node adds about 19 ms over its own bare start (about 24 ms), which is why it is the fallback and not the first choice.
+- These are lower bounds. A cold disk or a slower machine will be worse. The hook's `timeout` is 10 s, far above anything measured.
+
+## What the numbers taught us
+
+The first Node-compatible version took about 25 ms with Bun, against 8 to 10 ms for the Bun-only original. Profiling the pieces found that `process.stdin`'s stream setup alone cost about 17 ms on Bun (21.6 ms against 4.1 ms for a script that never touches stdin). Reading fd 0 with `readSync` costs about 3 ms and brought the hook back to about 10 ms. If you change how the script reads input, re-run the benchmark.
 
 ## Not measured
 
 - Cold start (first run after boot, or after the page cache is dropped).
-- An `if` filter on the hook to skip non-`aws` commands before Bun starts. It would save at most about 8 ms per non-`aws` Bash call, and it would move the "is this aws?" check out of the tested code. Whether the hooks docs support such a field has not been checked.
 - Concurrent calls.
 
 ## Reproducing
 
-Save as `bench.ts` and run `bun run bench.ts`. It reads `/home/user/.claude/settings.json`; change the path and `CLAUDE_PROJECT_DIR` if the project lives elsewhere.
-
-```ts
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-const N = 40;
-const home = mkdtempSync(join(tmpdir(), "bench-")); mkdirSync(join(home, ".claude"));
-const settings = JSON.parse(readFileSync("/home/user/.claude/settings.json", "utf8"));
-const wrapper = settings.hooks.PreToolUse[0].hooks[0].command;
-const env = { ...process.env, HOME: home, CLAUDE_PROJECT_DIR: "/home/user" };
-const P = "aws --profile sandbox";
-const cases: [string, string][] = [
-  ["passthrough: ls -la", "ls -la"],
-  ["passthrough: git status", "git status"],
-  ["allow: read + query", `${P} ec2 describe-instances --query Foo`],
-  ["allow: s3 ls", `${P} s3 ls`],
-  ["deny: no query", `${P} ec2 describe-instances`],
-  ["deny: hard deny", `${P} iam delete-user --user-name x`],
-  ["deny: no profile", "aws s3 ls"],
-  ["ask: mutation", `${P} ec2 run-instances`],
-  ["ask: compound", `${P} s3 ls; echo hi`],
-  ["ask: path-prefixed", "/usr/local/bin/aws s3 ls"],
-];
-async function time(argv: string[], stdin: string) {
-  const t = performance.now();
-  const p = Bun.spawn(argv, { stdin: new Blob([stdin]), stdout: "ignore", stderr: "ignore", env });
-  await p.exited;
-  return performance.now() - t;
-}
-async function bench(label: string, argv: string[], stdin: string) {
-  for (let i = 0; i < 5; i++) await time(argv, stdin); // warm-up
-  const xs: number[] = [];
-  for (let i = 0; i < N; i++) xs.push(await time(argv, stdin));
-  xs.sort((a, b) => a - b);
-  const mean = xs.reduce((a, b) => a + b) / N;
-  console.log(`${label.padEnd(28)} mean ${mean.toFixed(1).padStart(6)}  p50 ${xs[N / 2].toFixed(1).padStart(6)}  p95 ${xs[Math.floor(N * 0.95)].toFixed(1).padStart(6)}  max ${xs[N - 1].toFixed(1).padStart(6)} ms`);
-}
-await bench("baseline: sh -c true", ["sh", "-c", "true"], "");
-await bench("baseline: bun -e ''", ["bun", "-e", ""], "");
-for (const [label, cmd] of cases)
-  await bench(label, ["sh", "-c", wrapper], JSON.stringify({ tool_input: { command: cmd } }));
+```sh
+bun run bench
+# Node only: run with Bun off the PATH, for example
+PATH=/path/to/node/bin:/usr/bin:/bin /path/to/bun scripts/bench.ts
 ```
+
+The script is [`scripts/bench.ts`](../scripts/bench.ts).

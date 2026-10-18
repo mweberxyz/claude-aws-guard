@@ -1,10 +1,64 @@
 # aws-guard
 
-A [Claude Code hook](https://code.claude.com/docs/en/hooks) that makes `aws` CLI calls safer when Claude runs them through its Bash tool.
+[![CI](https://github.com/mweberxyz/claude-aws-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/mweberxyz/claude-aws-guard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Before every Bash command, the hook checks whether it is an `aws` call. If it isn't, the hook stays out of the way. If it is, the hook allows it, denies it, or asks you, based on a fixed set of rules. Every `aws` decision is written to an audit log.
+A [Claude Code](https://code.claude.com) plugin that makes `aws` CLI calls safer when Claude runs them through its Bash tool.
 
-It is a guard rail, not a sandbox. See [What it doesn't protect against](#what-it-doesnt-protect-against).
+Before every Bash command, a [PreToolUse hook](https://code.claude.com/docs/en/hooks) checks whether it is an `aws` call. If it isn't, the hook stays out of the way. If it is, the hook **allows**, **denies** or **asks you**, using a fixed set of rules, and writes the decision to an audit log. When it denies a call, Claude sees the reason and can correct itself.
+
+```text
+Claude:  aws ec2 describe-instances
+Hook:    denied - No AWS profile given. Add --profile <name>, or prefix the command with AWS_PROFILE=<name>.
+
+Claude:  aws --profile sandbox ec2 describe-instances
+Hook:    denied - Read calls need --query selecting only the fields you need
+         (e.g. --query 'Reservations[].Instances[].[InstanceId,State.Name]')
+
+Claude:  aws --profile sandbox ec2 describe-instances --query 'Reservations[].Instances[].InstanceId'
+Hook:    allowed
+```
+
+It is a guard rail, not a sandbox: see [What it doesn't protect against](#what-it-doesnt-protect-against).
+
+## Install
+
+```text
+/plugin install aws-guard --marketplace mweberxyz/claude-aws-guard
+```
+
+You can also add the marketplace first with `/plugin marketplace add mweberxyz/claude-aws-guard` and then `/plugin install aws-guard@aws-guard`. When the plugin is enabled, Claude Code prompts for the [options](#configuration); the defaults are sensible.
+
+Requirements:
+
+- **Claude Code 2.1.295 or later.** The hook sets `onFailure: block`, which earlier versions don't know.
+- **`bun` or `node` on your `PATH`.** The hook prefers Bun, which starts about four times faster (see [docs/benchmarking.md](docs/benchmarking.md)).
+- **A POSIX shell.** On Windows, use WSL or Git Bash.
+- **A `~/.claude/` directory,** which exists once Claude Code has run. The audit log is appended there.
+
+If neither `bun` nor `node` is installed, the hook blocks Bash commands with the message `aws-guard needs node or bun on PATH`. See [Troubleshooting](#troubleshooting).
+
+### Recommended: add the deny rules
+
+A plugin can't ship permission rules, so add this second layer to your own `.claude/settings.json` (or `~/.claude/settings.json`). Claude Code enforces it itself, so it still applies if the hook crashes or can't run:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Bash(aws iam:*)",
+      "Bash(aws organizations:*)",
+      "Bash(aws sts assume-role:*)",
+      "Bash(aws configure:*)",
+      "Bash(aws secretsmanager get-secret-value:*)"
+    ]
+  }
+}
+```
+
+### Manual install, without the plugin
+
+Copy `plugins/aws-guard/dist/aws_guard.mjs` to `.claude/hooks/aws-guard/aws_guard.mjs` in your project and merge [`examples/settings.json`](examples/settings.json) into `.claude/settings.json`. A manual install has no options, so it always uses the defaults.
 
 ## What it does
 
@@ -18,12 +72,14 @@ It is a guard rail, not a sandbox. See [What it doesn't protect against](#what-i
 | Compound or indirect commands (`;`, `&`, `\|`, backticks, newlines, `$(`, `eval`, `bash -c`, `xargs`) | **ask** |
 | Wrappers (`sudo aws`, `time aws`), path-prefixed `aws` (`/usr/local/bin/aws`), unterminated quotes | **ask** |
 | No profile given | **deny** |
-| Profile name contains `prod` (any case) | **deny** |
+| Profile name matches the blocked pattern (default: contains `prod`) | **deny** |
 | Read-only call with no `--query`, or a `--query` that selects everything | **deny** |
 | A hard-denied command (below) | **deny** |
 | Anything goes wrong inside the hook | **deny** |
 
 ### Hard denies
+
+These can't be configured away:
 
 - `iam` `create-*`, `attach-*`, `put-*`, `update-*`, `delete-*`, `add-*`
 - `sts assume-role*`
@@ -37,11 +93,11 @@ It is a guard rail, not a sandbox. See [What it doesn't protect against](#what-i
 
 ### Profiles
 
-Every `aws` call needs an explicit profile, either `--profile NAME` or a leading `AWS_PROFILE=NAME` assignment. This stops a call from landing in whatever default account is configured. `--profile` wins if both are present.
+Every `aws` call needs an explicit profile, either `--profile NAME` or a leading `AWS_PROFILE=NAME` assignment, so a call can't land in whatever default account is configured. `--profile` wins if both are present. If you would rather rely on an `AWS_PROFILE` already set in Claude Code's environment, turn on the `use_environment_profile` [option](#configuration).
 
 ### The `--query` rule
 
-Operations starting with `describe-`, `list-`, `get-`, `head-`, `lookup-` or `batch-get-` must include a `--query` that narrows the output. The point is to make the caller decide which fields it needs instead of pulling everything. These are rejected as "selects everything": `@`, `*`, `[*]`, `[]`, `*.*`. `aws s3 ls` is exempt because high-level `s3` commands don't support `--query`.
+Operations starting with `describe-`, `list-`, `get-`, `head-`, `lookup-` or `batch-get-` must include a `--query` that narrows the output, so the caller decides which fields it needs instead of pulling everything. These are rejected as "selects everything": `@`, `*`, `[*]`, `[]`, `*.*`. `aws s3 ls` is exempt because high-level `s3` commands don't support `--query`.
 
 ### Examples
 
@@ -50,180 +106,82 @@ Operations starting with `describe-`, `list-`, `get-`, `head-`, `lookup-` or `ba
 aws --profile sandbox ec2 describe-instances --query 'Reservations[].Instances[].InstanceId'
 AWS_PROFILE=sandbox aws s3 ls
 
-# denied: no query
+# denied: no query / no profile / hard deny / prod profile
 aws --profile sandbox ec2 describe-instances
-# denied: no profile
 aws sts get-caller-identity
-# denied: hard deny
 aws --profile sandbox iam delete-user --user-name x
-# denied: prod profile
 aws --profile prod-admin s3 ls
 
-# asks: a mutation
+# asks: a mutation / a compound command
 aws --profile sandbox ec2 run-instances
-# asks: compound command
 aws --profile sandbox s3 ls && echo done
 ```
 
-When a call is denied, Claude sees the reason and can correct itself, for example by adding a profile.
+## Configuration
 
-## Install
+Claude Code prompts for these when the plugin is enabled and passes them to the hook as `CLAUDE_PLUGIN_OPTION_<NAME>` environment variables. Change them from the `/plugin` panel or `/config`.
 
-The hook needs [Bun](https://bun.sh) on the `PATH` and a `~/.claude/` directory. It assumes a POSIX shell, so on Windows use Git Bash or WSL.
+| Option | Default | What it does |
+|---|---|---|
+| `blocked_profile_pattern` | `prod` | Case-insensitive regular expression. Calls using a profile whose name matches are always denied. |
+| `extra_denied_commands` | none | Comma-separated commands to always deny, written `service` or `service:operation-prefix`, for example `rds,ec2:terminate-`. |
+| `require_query` | `true` | Deny read-only calls without a narrowing `--query`. |
+| `use_environment_profile` | `false` | Use `AWS_PROFILE` from Claude Code's environment when a call names no profile. The profile is still checked against the blocked pattern. |
 
-1. Put this directory at `.claude/hooks/aws-guard/` in your project.
-2. Merge this into `.claude/settings.json`:
-
-   ```json
-   {
-     "hooks": {
-       "PreToolUse": [
-         {
-           "matcher": "Bash",
-           "hooks": [
-             {
-               "type": "command",
-               "command": "bun run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws-guard/aws_guard.ts 2>>\"$HOME/.claude/aws-audit.log\" || { echo 'aws_guard failed' >&2; exit 2; }",
-               "timeout": 10,
-               "onFailure": "block"
-             }
-           ]
-         }
-       ]
-     },
-     "permissions": {
-       "deny": [
-         "Bash(aws iam:*)",
-         "Bash(aws organizations:*)",
-         "Bash(aws sts assume-role:*)",
-         "Bash(aws configure:*)",
-         "Bash(aws secretsmanager get-secret-value:*)"
-       ]
-     }
-   }
-   ```
-
-3. Run `bun test` in this directory to check the install.
-
-The command wrapper matters. It makes the shell write the audit log, and it turns a crash of the script into exit code 2, which blocks the call. Run the script bare and a crash would let the command through. `onFailure` needs Claude Code v2.1.295 or later; it makes timeouts and other hook failures block too.
-
-The `permissions.deny` entries are a second layer. Claude Code enforces them itself, so they still apply if the hook crashes or `bun` is missing. They repeat the hard denies on purpose.
+A setting that can't be parsed (an invalid regular expression, a malformed denied-command entry, a boolean that isn't `true` or `false`) is an error and not a silent default, so a typo can't loosen the policy. While a setting is broken, every `aws` call is denied with `aws-guard configuration error: …`; other commands are unaffected.
 
 ## The audit log
 
 Every `aws` decision is appended to `~/.claude/aws-audit.log` as one JSON line:
 
 ```json
-{"ts":"2026-10-18T02:01:49.069Z","decision":"deny","reason":"Add --profile <sandbox-profile> (and --region)","cmd":"aws sts get-caller-identity"}
+{"ts":"2026-10-18T02:01:49.069Z","decision":"deny","reason":"No AWS profile given. Add --profile <name>, or prefix the command with AWS_PROFILE=<name>.","cmd":"aws sts get-caller-identity"}
 ```
 
 Commands that aren't `aws` calls are not logged. The shell opens the log, not the script. If it can't be opened (for example `~/.claude/` doesn't exist), the hook fails and the command is blocked. The log can also pick up non-JSON error text if the hook itself breaks, so filter with care.
 
 ## Failing closed
 
-The hook is designed so that a problem blocks a command, not lets it through:
+The hook is built so that a problem blocks a command instead of letting it through:
 
 - An error inside the script (bad input, a bug) becomes a **deny** with the error in the reason.
 - A crash outside the script's own error handling makes the wrapper exit 2, which blocks.
-- A timeout or other hook failure blocks, through `onFailure`.
+- A timeout or other hook failure blocks, through `onFailure: block`.
 - An unwritable audit log blocks.
-
-The flip side: if `bun` isn't installed, or the script path in `settings.json` is wrong, **every Bash command is blocked**, not just `aws` ones. If Claude Code starts refusing everything with `aws_guard failed`, check those two things first. Edit `settings.json` with a tool that isn't a Bash command, since Bash is what's blocked.
+- A missing `bun` and `node` blocks, with a message saying so.
 
 ## What it doesn't protect against
 
 - **Anything that isn't a Bash command string.** A script that calls AWS through boto3 or another SDK bypasses the hook.
-- **Commands it can't parse.** Compound and indirect commands go to `ask`, so a human decides, and the hook doesn't try to reason about them.
+- **Commands it can't parse.** Compound and indirect commands go to `ask`, so a human decides; the hook doesn't try to reason about them.
+- **Claude changing the hook itself.** The Edit tool isn't a Bash command, so the hook can't see it. See [docs/hardening.md](docs/hardening.md).
 - **Loose matching.** Any command that mentions `aws` after whitespace, a quote or a `/` is treated as an `aws` call, so even a heredoc that only contains the word gets an `ask` and an audit line. This is noisy on purpose.
 
-Back the profile with a read-only IAM role or SSO permission set so the hook isn't your only protection.
+Back the profile with a read-only IAM role or SSO permission set so the hook isn't your only protection. To report a way around the hook, see [SECURITY.md](SECURITY.md).
 
-## Making it more airtight
+## Troubleshooting
 
-Out of the box, the hook and its settings live in the project, and **Claude can edit them**. The Edit tool isn't a Bash command, so this hook never sees it: Claude could change `aws_guard_lib.ts`, remove the hook from `settings.json`, or empty the audit log. (It happened by accident during development: after a file move broke the hook's path, the fix to `settings.json` went through the Edit tool because the hook was blocking every Bash call.) If the hook is meant to hold against Claude itself, or against a prompt injection that steers it, lock down who can change it. These steps are listed from strongest to weakest, and you can combine them.
+**Every Bash command is blocked.** The hook fails closed, so a missing runtime or a broken install blocks everything, not only `aws` calls. Check that `bun` or `node` is on the `PATH` Claude Code uses, and that Claude Code is 2.1.295 or later. To get unblocked, run `claude plugin uninstall aws-guard` in a normal terminal, or use the `/plugin` panel. Neither is a Bash tool call, so the hook doesn't see them.
 
-### 1. Deploy the hook as managed settings
+**A command was asked about that you expected to pass.** Compound commands, wrappers and path-prefixed `aws` all go to `ask` by design. Look at the `reason` in the audit log.
 
-Managed settings have the highest precedence. Nothing in user, project, local or `--settings` values overrides them, apart from a few security-sensitive exceptions where a stricter lower-level value still counts. Put the hook registration and the `permissions.deny` block in `managed-settings.json` instead of the project's `.claude/settings.json`:
-
-- Linux and WSL: `/etc/claude-code/managed-settings.json`
-- macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
-- Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
-
-Then add `"allowManagedHooksOnly": true`, which restricts which hooks run, and `"allowManagedPermissionRulesOnly": true`, which makes managed settings the only source of permission rules, so a project file can't add allow rules that loosen the denies. Run `/status` in a session and check that the settings sources include `Enterprise managed settings (file)`. The docs call out that on WSL `/etc/claude-code` is user-writable, so use the Windows location or tighten its permissions there.
-
-### 2. Move the hook out of the project and make it read-only
-
-`$CLAUDE_PROJECT_DIR` is a directory Claude can write to. Install the hook somewhere it can't, such as `/opt/aws-guard/`, owned by root and not writable by the user Claude runs as (`chown -R root:root`, `chmod -R go-w`). Point the managed hook command at the absolute path, for example `bun run /opt/aws-guard/aws_guard.ts 2>>"$HOME/.claude/aws-audit.log" || { …; exit 2; }`. Without this, managed settings only protect the registration, and Claude could still rewrite the script it points to. Without the managed-settings step, a file permission alone doesn't stop Claude from editing `settings.json`.
-
-### 3. Add permission deny rules for the files
-
-If you keep the hook in the project, add `Edit` deny rules for its files and settings. Use `Edit(...)`: Claude Code checks file permissions against `Edit(path)` and `Read(path)` rules only, and accepts a `Write(path)` rule without ever consulting it.
-
-```json
-{
-  "permissions": {
-    "deny": [
-      "Edit(/.claude/hooks/aws-guard/**)",
-      "Edit(/.claude/settings.json)",
-      "Edit(/.claude/settings.local.json)",
-      "Edit(//root/.claude/aws-audit.log)"
-    ]
-  }
-}
-```
-
-A rule path starting with `/` is relative to the settings file's source, and `//` is an absolute filesystem path, so adjust the last entry for your home directory. The docs say Edit deny rules apply to the built-in file tools and to file commands Claude Code recognizes in Bash (such as `sed` and `tee`) and Bash redirections. They do **not** cover an arbitrary subprocess that writes files itself, such as a Python or Node script. That gap is what the sandbox closes.
-
-### 4. Turn on the Bash sandbox
-
-The sandbox is off by default. It enforces limits at the operating-system level on shell commands and the processes they start (macOS, Linux and WSL2; native Windows runs unsandboxed). When it is on, it denies writes to the `.claude` settings files and the `.claude/hooks` directory by default, and nothing exempts those paths. It also denies writes to most of the contents of `~/.claude`. Recommended settings:
-
-```json
-{
-  "sandbox": {
-    "enabled": true,
-    "failIfUnavailable": true,
-    "allowUnsandboxedCommands": false
-  }
-}
-```
-
-- `failIfUnavailable` makes Claude Code refuse to start if the sandbox can't run, instead of silently running commands unsandboxed.
-- `allowUnsandboxedCommands: false` stops Claude retrying a failed command with `dangerouslyDisableSandbox`. If you leave the retry on, add an ask rule for `Bash(dangerouslyDisableSandbox:true)` so you get prompted.
-- Add `sandbox.filesystem.denyWrite` entries for anything else you want frozen, such as the install directory from step 2.
-- The sandbox covers shell commands only. Claude's file tools, MCP servers and hooks run outside it, which is why steps 1 to 3 are still needed.
-
-### 5. Protect the audit log
-
-The log is written by the hook's shell wrapper, outside the sandbox. To make it append-only, set the append-only attribute as root on Linux (`chattr +a ~/.claude/aws-audit.log`, filesystem permitting), or ship the lines to a remote log service. The hook only needs append access.
-
-### 6. Back it with real credentials
-
-None of the above limits what a permitted profile can do. Point `--profile` at a read-only IAM role or SSO permission set so that a bypass, whether of the hook or of the Bash tool, still can't change anything in AWS.
-
-### Check that it worked
-
-After locking down, test it from a Claude session: ask Claude to edit `aws_guard_lib.ts`, to remove the hook from `settings.json`, and to run a shell command that writes to the install directory. Each should be refused. The docs I checked don't say whether a lower-level `disableAllHooks` setting can switch off a hook that managed settings deploy, so test that case before relying on it.
-
-## Performance
-
-About 8 to 10 ms per Bash call, whatever the decision, mostly Bun's startup. See [benchmarking.md](benchmarking.md).
+**A command was denied for a profile you expected to be allowed.** Check `blocked_profile_pattern`: the default `prod` matches any profile containing it, such as `reproduction`.
 
 ## Development
 
 ```sh
-bun test              # all tests
-bun test --coverage   # coverage of aws_guard_lib.ts
+bun install
+bun run typecheck       # tsc --strict
+bun test                # all tests
+bun test --coverage     # coverage of the policy lib
+bun run build           # rebuild plugins/aws-guard/dist after changing src/
+bun run check-dist      # fail if dist/ is out of date
+bun run validate        # claude plugin validate, plugin and marketplace
+bun run bench           # per-call latency
 ```
 
-| File | Role |
-|---|---|
-| `aws_guard.ts` | Entry point: reads stdin, prints the decision, writes the audit line, fails closed |
-| `aws_guard_lib.ts` | The policy: `shellSplit`, `parseAws`, `evaluate`. No I/O |
-| `aws_guard_lib.test.ts` | In-process tests: the full policy table and parser edge cases |
-| `aws_guard.test.ts` | Subprocess tests: end-to-end smoke cases, fail-closed behavior, audit log, the `settings.json` wrapper |
-| `benchmarking.md` | Latency numbers and the script that produced them |
-| `CLAUDE.md` | Notes for Claude when editing this directory |
+`dist/aws_guard.mjs` is committed because the plugin ships it; always rebuild it when you change `src/`. See [CLAUDE.md](CLAUDE.md) for the layout and the rules to preserve.
 
-To change a rule, edit `aws_guard_lib.ts`, add or update its row in the policy table in `aws_guard_lib.test.ts`, and mirror hard denies in `permissions.deny`.
+## License
+
+[MIT](LICENSE)
