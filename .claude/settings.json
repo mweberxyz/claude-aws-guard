@@ -4,9 +4,22 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "bun run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws_guard.ts" }
+          {
+            "type": "command",
+            "command": "bun run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/aws_guard.ts",
+            "timeout": 10
+          }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(aws iam:*)",
+      "Bash(aws organizations:*)",
+      "Bash(aws sts assume-role:*)",
+      "Bash(aws configure:*)",
+      "Bash(aws secretsmanager get-secret-value:*)"
     ]
   }
 }
