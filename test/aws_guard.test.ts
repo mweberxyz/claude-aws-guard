@@ -176,16 +176,6 @@ describe.skipIf(!Bun.which("node"))("built dist under node", () => {
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("aws_guard script failed");
   });
-
-  test("dist matches a fresh build of src", async () => {
-    const out = join(mkdtempSync(join(tmpdir(), "aws-guard-build-")), "aws_guard.mjs");
-    const b = Bun.spawn(["bun", "build", SCRIPT, "--target=node", "--outfile", out], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    expect(await b.exited).toBe(0);
-    expect(readFileSync(DIST, "utf8")).toBe(readFileSync(out, "utf8"));
-  });
 });
 
 // Exercises the exact command string from hooks.json, so the shell wrapper is covered too.

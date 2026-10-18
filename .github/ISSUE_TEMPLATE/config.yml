@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a way to bypass the hook
+    url: https://github.com/mweberxyz/claude-aws-guard/security/advisories/new
+    about: Please report bypasses privately rather than in a public issue.
