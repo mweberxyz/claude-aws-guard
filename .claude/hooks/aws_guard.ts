@@ -15,7 +15,7 @@ type Verdict =
   | { decision: "passthrough" }; // not an aws call: print nothing, normal permission flow
 
 // Minimal shlex.split: handles single quotes, double quotes, backslash escapes.
-function shellSplit(s: string): string[] {
+function shellSplit(s: string): string[] | { error: string } {
   const out: string[] = [];
   let cur = "";
   let inTok = false;
@@ -46,7 +46,7 @@ function shellSplit(s: string): string[] {
       inTok = true;
     }
   }
-  if (quote) throw new Error("unterminated quote");
+  if (quote) return { error: "Unparseable command (unterminated quote)" };
   if (inTok) out.push(cur);
   return out;
 }
@@ -78,7 +78,9 @@ type ParsedAws = {
 };
 
 // Parses `[VAR=value ...] aws [global flags] <service> <op> [flags]`.
-function parseAws(tokens: string[]): ParsedAws | { error: string } {
+function parseAws(cmd: string): ParsedAws | { error: string } {
+  const tokens = shellSplit(cmd);
+  if ("error" in tokens) return tokens;
   const argv = [...tokens];
 
   // Strip leading VAR=value assignments (e.g. AWS_PROFILE=sandbox aws ...).
@@ -118,14 +120,7 @@ function evaluate(cmd: string): Verdict {
     return { decision: "ask", reason: "aws inside a compound or indirect command" };
   }
 
-  let argv: string[];
-  try {
-    argv = shellSplit(cmd);
-  } catch {
-    return { decision: "ask", reason: "Unparseable command" };
-  }
-
-  const parsed = parseAws(argv);
+  const parsed = parseAws(cmd);
   if ("error" in parsed) return { decision: "ask", reason: parsed.error };
   const { service, op, profile, query, has } = parsed;
 
