@@ -75,6 +75,20 @@ jobs:
           VERSION: ${{ matrix.version }}
           LABELS: ${{ matrix.labels }}
         run: bun scripts/compat/probe.ts --version "$VERSION" --labels "$LABELS" --out compat-results
+      # claude -p can't show a prompt, but the Agent SDK calls `canUseTool` where Claude Code would, so
+      # this shows whether an `ask` still prompts under bypass. It uses the SDK release that bundles
+      # this exact Claude Code version, installed with install scripts off.
+      - name: Install Agent SDK ${{ matrix.sdk }}
+        if: ${{ !cancelled() && matrix.sdk != '' }}
+        env:
+          SDK: ${{ matrix.sdk }}
+        run: npm install --prefix "$RUNNER_TEMP/sdk" --ignore-scripts --no-audit --no-fund "@anthropic-ai/claude-agent-sdk@${SDK}"
+      - name: Check that an ask prompts, with the Agent SDK
+        if: ${{ !cancelled() }}
+        env:
+          VERSION: ${{ matrix.version }}
+          LABELS: ${{ matrix.labels }}
+        run: bun scripts/compat/ask_sdk.ts --version "$VERSION" --labels "$LABELS" --sdk-dir "$RUNNER_TEMP/sdk" --out compat-results
       # Pull requests don't get the report job (it can write issues), so show this version's table here.
       - name: Summarize
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}

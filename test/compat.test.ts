@@ -3,10 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ASK_COMMAND,
   CASES,
   classify,
   compareVersions,
   evaluate,
+  evaluateAsk,
   ISSUE_TITLE,
   legStatus,
   mergeLegs,
@@ -16,6 +18,7 @@ import {
   renderReport,
   sanitizeLeg,
   sanitizeMatrix,
+  selectSdk,
   selectVersions,
   summaryTable,
   withMissing,
@@ -228,6 +231,62 @@ describe("evaluate", () => {
   });
 });
 
+describe("evaluateAsk", () => {
+  const ask = byId("ask");
+
+  test("an ask that reaches the permission callback and does not run passes, in both modes", () => {
+    expect(evaluateAsk("bypass", observed(ask, "bypass"), [ASK_COMMAND])).toEqual({ mode: "bypass", id: "ask_prompt", status: "pass", failed: [] });
+    expect(evaluateAsk("normal", observed(ask, "normal"), [ASK_COMMAND]).status).toBe("pass");
+  });
+
+  test("an ask that never reaches the callback fails", () => {
+    expect(evaluateAsk("bypass", observed(ask, "bypass"), []).failed).toEqual(["no_prompt"]);
+    expect(evaluateAsk("bypass", observed(ask, "bypass"), ["aws something else"]).failed).toEqual(["no_prompt"]);
+  });
+
+  test("an ask that ran although the callback denies it fails", () => {
+    const ran = observed(ask, "bypass", { ran: true });
+    expect(evaluateAsk("bypass", ran, [ASK_COMMAND]).failed).toEqual(["unexpected_execution"]);
+    expect(evaluateAsk("bypass", ran, []).failed).toEqual(["no_prompt", "unexpected_execution"]);
+  });
+
+  test("a wrong permission_mode fails", () => {
+    expect(evaluateAsk("bypass", observed(ask, "bypass", { permissionMode: "default" }), [ASK_COMMAND]).failed).toEqual(["permission_mode"]);
+    expect(evaluateAsk("normal", observed(ask, "normal", { permissionMode: "bypassPermissions" }), [ASK_COMMAND]).failed).toEqual(["permission_mode"]);
+  });
+
+  test("a call that never reached the hook fails; one never reported on is a harness error", () => {
+    expect(evaluateAsk("bypass", observed(ask, "bypass", { hook: false }), [ASK_COMMAND]).failed).toEqual(["hook_not_run"]);
+    expect(evaluateAsk("bypass", observed(ask, "bypass", { result: null }), []).status).toBe("error");
+  });
+});
+
+describe("selectSdk", () => {
+  const listing = [
+    { version: "0.3.294", claudeCodeVersion: "2.1.294" },
+    { version: "0.3.295", claudeCodeVersion: "2.1.295" },
+    { version: "0.3.296", claudeCodeVersion: "2.1.295" },
+    { version: "0.3.297; id", claudeCodeVersion: "2.1.297" },
+    { version: "0.3.298" },
+    null,
+  ];
+
+  test("finds the SDK release that bundles a Claude Code version, the newest if several do", () => {
+    expect(selectSdk(listing, "2.1.294")).toBe("0.3.294");
+    expect(selectSdk(listing, "2.1.295")).toBe("0.3.296");
+  });
+
+  test("returns undefined when none matches or the version isn't plain", () => {
+    expect(selectSdk(listing, "2.1.299")).toBeUndefined();
+    expect(selectSdk(listing, "2.1.297")).toBeUndefined();
+  });
+
+  test("npm prints a single object, not a list, when one version matches", () => {
+    expect(selectSdk({ version: "0.3.303", claudeCodeVersion: "2.1.303" }, "2.1.303")).toBe("0.3.303");
+    expect(selectSdk(undefined, "2.1.303")).toBeUndefined();
+  });
+});
+
 describe("legStatus", () => {
   const check = (status: CheckResult["status"]): CheckResult => ({ mode: "normal", id: "allow", status, failed: [] });
   const leg = (statuses: CheckResult["status"][], error?: LegResult["error"]): LegResult => ({
@@ -253,7 +312,7 @@ describe("legStatus", () => {
   });
 });
 
-const check = (mode: Mode, id: Case["id"], status: CheckResult["status"], failed: CheckResult["failed"] = []): CheckResult => ({ mode, id, status, failed });
+const check = (mode: Mode, id: CheckResult["id"], status: CheckResult["status"], failed: CheckResult["failed"] = []): CheckResult => ({ mode, id, status, failed });
 const passing = (version: string, labels: LegResult["labels"]): LegResult => ({
   version,
   labels,
@@ -292,6 +351,11 @@ describe("sanitizeLeg", () => {
       labels: ["latest"],
       checks: [{ mode: "bypass", id: "ask", status: "fail", failed: ["unexpected_execution"] }],
     });
+  });
+
+  test("keeps the Agent SDK check", () => {
+    const leg = sanitizeLeg({ version: "2.1.303", checks: [{ mode: "bypass", id: "ask_prompt", status: "fail", failed: ["no_prompt"] }] });
+    expect(leg?.checks).toEqual([{ mode: "bypass", id: "ask_prompt", status: "fail", failed: ["no_prompt"] }]);
   });
 
   test.each([null, "text", 7, {}, { version: "latest" }, { version: "2.1.303; id" }, { version: 2 }])("rejects %p", (raw) => {
@@ -410,11 +474,12 @@ describe("report text", () => {
           version: "2.1.303",
           labels: ["latest"],
           checks: [
-            check("bypass", "deny", "fail", ["hook_not_run", "permission_mode", "audit_decision", "audit_missing", "audit_unexpected", "unexpected_execution", "missing_execution", "reason_not_shown"]),
+            check("bypass", "deny", "fail", ["hook_not_run", "permission_mode", "audit_decision", "audit_missing", "audit_unexpected", "unexpected_execution", "missing_execution", "reason_not_shown", "no_prompt"]),
           ],
         },
         { version: "2.1.302", labels: ["previous"], checks: [], error: "version_mismatch" },
         { version: "2.1.301", labels: [], checks: [], error: "no_results" },
+        { version: "2.1.300", labels: [], checks: [], error: "sdk_unavailable" },
       ],
       RUN,
     );
@@ -422,6 +487,8 @@ describe("report text", () => {
     expect(text).toContain("never saw it");
     expect(text).toContain("isn't the requested version");
     expect(text).toContain("no results");
+    expect(text).toContain("could not be loaded");
+    expect(text).toContain("a user would not have been asked");
   });
 
   test("a clean report has no per-version notes", () => {

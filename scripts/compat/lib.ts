@@ -125,11 +125,12 @@ export type FailureCode =
   | "audit_unexpected" // the guard logged a command it should have ignored
   | "unexpected_execution" // the command ran although it must not have
   | "missing_execution" // the command didn't run although it must have
-  | "reason_not_shown"; // a denied call's reason did not reach Claude
+  | "reason_not_shown" // a denied call's reason did not reach Claude
+  | "no_prompt"; // an `ask` never reached the permission callback, so no user would have been asked
 
 export interface CheckResult {
   mode: Mode;
-  id: Case["id"];
+  id: Case["id"] | "ask_prompt";
   status: Status;
   failed: FailureCode[];
 }
@@ -174,6 +175,38 @@ export function evaluate(c: Case, mode: Mode, obs: Observation): CheckResult {
   return result(failed.length ? "fail" : "pass", failed);
 }
 
+// ---- Agent SDK: does an `ask` prompt? ----------------------------------------------------------
+
+export const ASK_COMMAND = CASES.find((c) => c.id === "ask")!.command;
+
+// The Agent SDK calls `canUseTool` where Claude Code would show a permission prompt, so a call to it
+// is the direct evidence that an `ask` would have asked a user. `prompted` is every command the
+// callback was asked about. The callback always denies, so the command can only run if something
+// skipped the prompt: that is the second assertion.
+export function evaluateAsk(mode: Mode, obs: Observation, prompted: string[]): CheckResult {
+  const result = (status: Status, failed: FailureCode[] = []): CheckResult => ({ mode, id: "ask_prompt", status, failed });
+  if (!obs.toolResult) return result("error");
+  const seen = parseHookLog(obs.hookLog).filter((e) => e.command === ASK_COMMAND);
+  if (seen.length === 0) return result("fail", ["hook_not_run"]);
+
+  const failed: FailureCode[] = [];
+  if (!seen.every((e) => modeOk(mode, e.permissionMode))) failed.push("permission_mode");
+  if (!prompted.includes(ASK_COMMAND)) failed.push("no_prompt");
+  if (obs.shimLog.split("\n").includes(ASK_COMMAND.replace(/^aws /, ""))) failed.push("unexpected_execution");
+  return result(failed.length ? "fail" : "pass", failed);
+}
+
+// The Agent SDK release that bundles a given Claude Code version, from
+// `npm view @anthropic-ai/claude-agent-sdk version claudeCodeVersion --json`. Undefined if there is none.
+export function selectSdk(listing: unknown, claudeCodeVersion: string): string | undefined {
+  const entries = Array.isArray(listing) ? listing : [listing];
+  return entries
+    .filter((e: any) => e?.claudeCodeVersion === claudeCodeVersion && typeof e.version === "string" && SEMVER.test(e.version))
+    .map((e: any) => e.version as string)
+    .sort(compareVersions)
+    .pop();
+}
+
 // ---- Results across versions -------------------------------------------------------------------
 
 export interface LegResult {
@@ -186,7 +219,7 @@ export interface LegResult {
   error?: ErrorCode;
 }
 
-export type ErrorCode = "version_mismatch" | "claude_failed" | "no_results";
+export type ErrorCode = "version_mismatch" | "claude_failed" | "no_results" | "sdk_unavailable";
 
 export function legStatus(leg: LegResult): Status {
   if (leg.checks.some((c) => c.status === "fail")) return "fail";
@@ -199,7 +232,7 @@ export function legStatus(leg: LegResult): Status {
 
 const STATUSES: Status[] = ["pass", "fail", "error"];
 const MODES: Mode[] = ["normal", "bypass"];
-const IDS: string[] = CASES.map((c) => c.id);
+const IDS: string[] = [...CASES.map((c) => c.id), "ask_prompt"];
 const FAILURES: FailureCode[] = [
   "hook_not_run",
   "permission_mode",
@@ -209,9 +242,10 @@ const FAILURES: FailureCode[] = [
   "unexpected_execution",
   "missing_execution",
   "reason_not_shown",
+  "no_prompt",
 ];
 const LABELS: VersionLabel[] = ["minimum", "previous", "latest"];
-const ERRORS: ErrorCode[] = ["version_mismatch", "claude_failed", "no_results"];
+const ERRORS: ErrorCode[] = ["version_mismatch", "claude_failed", "no_results", "sdk_unavailable"];
 
 // The probe jobs run code from npm and from the pull request under test, so what they write is not
 // trusted by the job that files issues. Every field is checked against a fixed list and anything else
@@ -246,6 +280,7 @@ const ERROR_TEXT: Record<ErrorCode, string> = {
   version_mismatch: "the installed `claude` isn't the requested version",
   claude_failed: "`claude` ran but never reported back on the call, so nothing could be judged. The mock API probably lacks something this release needs",
   no_results: "the job produced no results (install or runner failure)",
+  sdk_unavailable: "the Agent SDK release bundling this version could not be loaded",
 };
 
 const FAILURE_TEXT: Record<FailureCode, string> = {
@@ -257,6 +292,7 @@ const FAILURE_TEXT: Record<FailureCode, string> = {
   unexpected_execution: "the command ran, but must not have",
   missing_execution: "the command did not run, but must have",
   reason_not_shown: "Claude was not told why the call was denied",
+  no_prompt: "the `ask` never reached the permission callback, so a user would not have been asked",
 };
 
 const label = (leg: LegResult) => `${leg.version} (${leg.labels.join(", ") || "unlabeled"})`;
