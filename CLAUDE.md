@@ -18,6 +18,7 @@ A Claude Code plugin (`aws-guard`) containing a PreToolUse hook that guards `aws
 | `scripts/bench.ts` | Latency benchmark. Results in `docs/benchmarking.md`. |
 | `docs/hardening.md` | How to stop Claude changing the hook. Not applied by default. |
 | `SECURITY.md`, `CHANGELOG.md`, `README.md` | Public docs. |
+| `.claude/skills/release/SKILL.md` | The release process: whether to release, which version, the release commit and the `gh release create` command. |
 
 This `CLAUDE.md` is deliberately at the repo root, outside `plugins/aws-guard/`: a `CLAUDE.md` inside a plugin isn't loaded as context and `claude plugin validate` warns about it.
 
@@ -64,7 +65,13 @@ Semver, read the way pre-1.0 software is usually read. While the version is `0.x
 - **Patch (`0.x.Y`)**: bug fixes, and new features or options that are completely backwards compatible. A new option must default to the old behavior, and existing configs and commands must decide exactly as before.
 - **Minor (`0.X.0`)**: anything that is not completely backwards compatible, including tightening a default (a new hard deny, a stricter rule), as `CHANGELOG.md` says.
 
-To release, set the same version in `package.json` and `plugins/aws-guard/.claude-plugin/plugin.json`, then give the `CHANGELOG.md` section a version and date and add its link at the bottom. Don't create tags: the signer only signs commits.
+### Releasing
+
+Invoke the `release` skill (`.claude/skills/release/SKILL.md`) whenever a PR is close to merging, and whenever the user asks for a release. It decides whether the change needs a release at all, picks the version, prepares the release commit and gives the user a `gh release create` command to run. Many PRs won't need a release, and the skill ends quickly when they don't.
+
+A release can be the last commit on the PR branch before it merges, or its own conversation and PR after several unreleased commits have landed on `main`. In the second case the skill reviews those commits to decide what belongs in the release notes.
+
+The release commit sets the same version in `package.json` and `plugins/aws-guard/.claude-plugin/plugin.json` and dates the `CHANGELOG.md` section. Don't create or push tags or releases: the signer only signs commits and the session can't push tags. The user runs the `gh` command.
 
 ## Known limits
 
