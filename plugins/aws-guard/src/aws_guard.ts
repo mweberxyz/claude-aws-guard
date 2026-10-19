@@ -15,21 +15,6 @@ import { evaluate, loadConfig, type Verdict } from "./aws_guard_lib";
 
 export {}; // marks this file as a module so tsc accepts the top-level await
 
-function warnIfDangerouslySkipPermissions(): void {
-  const argv = process.argv ?? [];
-  const claudeFlags = process.env.CLAUDE_FLAGS ?? "";
-  const startedWithDangerousFlag =
-    argv.includes("--dangerously-skip-permissions") ||
-    claudeFlags.includes("--dangerously-skip-permissions");
-
-  if (!startedWithDangerousFlag) return;
-
-  console.error(
-    "aws-guard: WARNING: Claude was started with --dangerously-skip-permissions; " +
-      "this bypasses permissions enforcement and disables the aws-guard plugin for Bash/aws calls.",
-  );
-}
-
 // Reads all of stdin with plain reads on fd 0. process.stdin's stream machinery costs about 17 ms of
 // startup on Bun, which would be added to every Bash call. A non-blocking pipe can report EAGAIN
 // when no data is ready yet, so wait briefly and retry instead of failing or dropping input.
@@ -54,8 +39,6 @@ function readStdin(): string {
   }
   return Buffer.concat(chunks).toString("utf8");
 }
-
-warnIfDangerouslySkipPermissions();
 
 let result: Verdict;
 try {

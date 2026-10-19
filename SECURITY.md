@@ -35,6 +35,7 @@ These are documented in the [README](README.md#what-it-doesnt-protect-against), 
 - AWS access that doesn't go through a Bash command string: SDKs such as boto3, other tools that call AWS, or an MCP server.
 - Claude (or anything else running as your user) editing the hook, its settings, or the audit log. Use [docs/hardening.md](docs/hardening.md).
 - Commands that mention `aws` but that the hook sends to `ask` because it can't parse them. A human decides those by design.
+- Running Claude Code with `--dangerously-skip-permissions`. Hooks are still run and their denies and asks still apply (observed, not documented), but the flag is meant to skip approvals. Keep the `permissions.deny` rules.
 - Native Windows. The wrapper needs a POSIX shell.
 - What a permitted profile is allowed to do in AWS. Use a read-only IAM role or SSO permission set.
 
