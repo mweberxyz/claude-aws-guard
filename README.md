@@ -72,7 +72,7 @@ Copy `plugins/aws-guard/dist/aws_guard.mjs` to `.claude/hooks/aws-guard/aws_guar
 | Compound or indirect commands (`;`, `&`, `\|`, backticks, newlines, `$(`, `eval`, `bash -c`, `xargs`) | **ask** |
 | Wrappers (`sudo aws`, `time aws`), path-prefixed `aws` (`/usr/local/bin/aws`), unterminated quotes | **ask** |
 | No profile given | **deny** |
-| Profile name matches the blocked pattern (default: contains `prod`) | **deny** |
+| Profile name matches the blocked pattern (default: contains `prod`; can be turned off with `block_profiles`) | **deny** |
 | Read-only call with no `--query`, or a `--query` that selects everything | **deny** |
 | A hard-denied command (below) | **deny** |
 | Anything goes wrong inside the hook | **deny** |
@@ -123,10 +123,11 @@ Claude Code prompts for these when the plugin is enabled and passes them to the 
 
 | Option | Default | What it does |
 |---|---|---|
-| `blocked_profile_pattern` | `prod` | Case-insensitive regular expression. Calls using a profile whose name matches are always denied. |
+| `block_profiles` | `true` | Apply the blocked profile pattern. Set to `false` to disable the rule entirely; calls must still name a profile. |
+| `blocked_profile_pattern` | `prod` | Case-insensitive regular expression. Calls using a profile whose name matches are always denied. Ignored when `block_profiles` is `false`. |
 | `extra_denied_commands` | none | Comma-separated commands to always deny, written `service` or `service:operation-prefix`, for example `rds,ec2:terminate-`. |
 | `require_query` | `true` | Deny read-only calls without a narrowing `--query`. |
-| `use_environment_profile` | `false` | Use `AWS_PROFILE` from Claude Code's environment when a call names no profile. The profile is still checked against the blocked pattern. |
+| `use_environment_profile` | `false` | Use `AWS_PROFILE` from Claude Code's environment when a call names no profile. The profile is still checked against the blocked pattern, unless `block_profiles` is `false`. |
 
 A setting that can't be parsed (an invalid regular expression, a malformed denied-command entry, a boolean that isn't `true` or `false`) is an error and not a silent default, so a typo can't loosen the policy. While a setting is broken, every `aws` call is denied with `aws-guard configuration error: …`; other commands are unaffected.
 
@@ -165,7 +166,7 @@ Back the profile with a read-only IAM role or SSO permission set so the hook isn
 
 **A command was asked about that you expected to pass.** Compound commands, wrappers and path-prefixed `aws` all go to `ask` by design. Look at the `reason` in the audit log.
 
-**A command was denied for a profile you expected to be allowed.** Check `blocked_profile_pattern`: the default `prod` matches any profile containing it, such as `reproduction`.
+**A command was denied for a profile you expected to be allowed.** Check `blocked_profile_pattern`: the default `prod` matches any profile containing it, such as `reproduction`. To drop the rule altogether, set `block_profiles` to `false`.
 
 ## Development
 

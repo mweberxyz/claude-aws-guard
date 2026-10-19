@@ -68,6 +68,7 @@ var DENY = [
   ["configure", /.*/]
 ];
 var DEFAULT_CONFIG = {
+  blockProfiles: true,
   blockedProfile: /prod/i,
   extraDenied: [],
   requireQuery: true,
@@ -106,6 +107,9 @@ function loadConfig(env) {
     }
     extraDenied.push([service, new RegExp(`^${prefix}`)]);
   }
+  const blockProfiles = parseBool(opt("BLOCK_PROFILES"), DEFAULT_CONFIG.blockProfiles, "block_profiles");
+  if (typeof blockProfiles === "object")
+    return blockProfiles;
   const requireQuery = parseBool(opt("REQUIRE_QUERY"), DEFAULT_CONFIG.requireQuery, "require_query");
   if (typeof requireQuery === "object")
     return requireQuery;
@@ -113,6 +117,7 @@ function loadConfig(env) {
   if (typeof useEnvProfile === "object")
     return useEnvProfile;
   return {
+    blockProfiles,
     blockedProfile,
     extraDenied,
     requireQuery,
@@ -180,7 +185,7 @@ function evaluate(cmd, config = DEFAULT_CONFIG) {
   if (service === "ssm" && has("--with-decryption")) {
     return { decision: "deny", reason: "Decrypting SSM parameters is blocked" };
   }
-  if (profile && config.blockedProfile.test(profile)) {
+  if (profile && config.blockProfiles && config.blockedProfile.test(profile)) {
     return { decision: "deny", reason: `Profile '${profile}' is blocked (it matches the blocked profile pattern)` };
   }
   if (!profile) {

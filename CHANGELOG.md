@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org). Because the policy decides what Claude may run, tightening a default (a new hard deny, a stricter rule) is treated as a breaking change.
 
+## [Unreleased]
+
+### Added
+
+- `block_profiles` option (default `true`). Set it to `false` to disable the blocked-profile rule entirely. Calls must still name a profile, and every other rule still applies.
+
 ## [0.1.0] - 2026-10-18
 
 First public release.

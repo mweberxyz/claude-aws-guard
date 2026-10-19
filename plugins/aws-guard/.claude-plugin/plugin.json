@@ -21,10 +21,16 @@
     "security"
   ],
   "userConfig": {
+    "block_profiles": {
+      "type": "boolean",
+      "title": "Block profiles matching the pattern",
+      "description": "Deny calls that use an AWS profile matching the blocked profile pattern. Turn off to disable the rule entirely; calls must still name a profile.",
+      "default": true
+    },
     "blocked_profile_pattern": {
       "type": "string",
       "title": "Blocked profile pattern",
-      "description": "Case-insensitive regular expression. Calls using an AWS profile whose name matches are always denied. Leave empty for the default, \"prod\".",
+      "description": "Case-insensitive regular expression. Calls using an AWS profile whose name matches are always denied. Leave empty for the default, \"prod\". Has no effect when block_profiles is off.",
       "default": "prod"
     },
     "extra_denied_commands": {

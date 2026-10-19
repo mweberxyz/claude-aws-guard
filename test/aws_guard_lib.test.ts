@@ -291,6 +291,7 @@ describe("loadConfig", () => {
     expect(c.blockedProfile.test("sandbox")).toBe(false);
     expect(c.extraDenied).toEqual([]);
     expect(c.requireQuery).toBe(true);
+    expect(c.blockProfiles).toBe(true);
     expect(c.envProfile).toBeUndefined();
   });
 
@@ -333,8 +334,15 @@ describe("loadConfig", () => {
     },
   );
 
+  test.each([["true", true], ["1", true], ["", true], ["false", false], ["FALSE", false], ["0", false], ["no", false]])(
+    "block_profiles %p",
+    (raw, expected) => {
+      expect(ok(opt({ BLOCK_PROFILES: raw })).blockProfiles).toBe(expected);
+    },
+  );
+
   test("an unrecognized boolean is an error, not a default", () => {
-    for (const key of ["REQUIRE_QUERY", "USE_ENVIRONMENT_PROFILE"]) {
+    for (const key of ["BLOCK_PROFILES", "REQUIRE_QUERY", "USE_ENVIRONMENT_PROFILE"]) {
       const c = loadConfig(opt({ [key]: "maybe" }));
       expect("error" in c && c.error).toContain("must be true or false");
     }
@@ -349,6 +357,7 @@ describe("loadConfig", () => {
 
 describe("evaluate with configuration", () => {
   const cfg = (over: Partial<Config>): Config => ({
+    blockProfiles: true,
     blockedProfile: /prod/i,
     extraDenied: [],
     requireQuery: true,
@@ -360,6 +369,21 @@ describe("evaluate with configuration", () => {
     const c = cfg({ blockedProfile: /^live-/i });
     expect(evaluate("aws --profile live-main s3 ls", c).decision).toBe("deny");
     expect(evaluate("aws --profile prod s3 ls", c).decision).toBe("allow");
+  });
+
+  test("block_profiles off disables the blocked-profile rule, including for the environment profile", () => {
+    const c = cfg({ blockProfiles: false });
+    expect(evaluate("aws --profile prod s3 ls", c).decision).toBe("allow");
+    expect(evaluate("aws --profile prod ec2 describe-instances --query Foo", c).decision).toBe("allow");
+    expect(evaluate("aws s3 ls", cfg({ blockProfiles: false, envProfile: "prod" })).decision).toBe("allow");
+  });
+
+  test("block_profiles off still requires a profile and keeps every other rule", () => {
+    const c = cfg({ blockProfiles: false });
+    expect(evaluate("aws s3 ls", c).decision).toBe("deny");
+    expect(evaluate("aws --profile prod iam delete-user", c).decision).toBe("deny");
+    expect(evaluate("aws --profile prod ec2 describe-instances", c).decision).toBe("deny");
+    expect(evaluate("aws --profile prod ec2 run-instances", c).decision).toBe("ask");
   });
 
   test("extra denied commands", () => {

@@ -46,7 +46,7 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 - **Keep `aws_guard_lib.ts` free of I/O**, and keep `aws_guard.ts` thin.
 - **Keep startup cheap.** The hook runs before every Bash call. Don't read stdin through `process.stdin` (about 17 ms extra on Bun) and don't add imports with heavy startup. Re-run `bun run bench` if you change how the script starts.
 - **Runtime preference is Bun, then Node.** Bun starts about four times faster. The hook must keep working on Node, and the tests run the built file under Node.
-- **Decision order in `evaluate()` matters:** configuration error, then compound/indirect commands ask, then hard denies (built-in, then configured), then the blocked-profile pattern, then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
+- **Decision order in `evaluate()` matters:** configuration error, then compound/indirect commands ask, then hard denies (built-in, then configured), then the blocked-profile pattern (skipped when `block_profiles` is off), then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
 
 ## When changing a rule
 
