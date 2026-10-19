@@ -184,6 +184,31 @@ bun run bench           # per-call latency
 
 `dist/aws_guard.mjs` is committed because the plugin ships it; always rebuild it when you change `src/`. See [CLAUDE.md](CLAUDE.md) for the layout and the rules to preserve.
 
+### Compatibility checks
+
+Some of what these docs say about Claude Code is observed behavior, not documented behavior, so it could change in a release without anyone noticing. A workflow, [`compat.yml`](.github/workflows/compat.yml), checks it against the real `claude`. It runs on pull requests, on pushes to `main`, weekly, on release tags and on demand.
+
+Each run covers three Claude Code versions: the minimum this README requires, the newest release and the release before it. For each version it starts `claude -p` with the guard installed the [manual way](#manual-install-without-the-plugin), in normal mode and with `--dangerously-skip-permissions`, and has Claude Code run four fixed commands:
+
+| Command | Expected |
+|---|---|
+| `aws s3 ls --profile test` | allowed: the fake `aws` runs, the audit log says `allow` |
+| `aws iam list-users --profile prod` | denied: the fake `aws` does not run, the audit log says `deny`, and Claude is told the reason |
+| `aws s3 cp ./x s3://b/x --profile test` | asks: the fake `aws` does not run, the audit log says `ask` |
+| `echo hello` | passes through: no audit line |
+
+A second hook logs every Bash call's input, so the check also asserts that `permission_mode` is `bypassPermissions` with the flag and a different documented value without it.
+
+**There is no model and no API key.** What the docs claim is about Claude Code's own handling of a tool call (hooks, permission modes, what it reports back), not about what a model says. So `ANTHROPIC_BASE_URL` points at a small mock of the Messages API, [`scripts/compat/mock_api.ts`](scripts/compat/mock_api.ts), that asks for one scripted Bash command and records the result Claude Code sends back. The run is deterministic, costs nothing and holds no secrets, which is why it can run on pull requests from forks. Nothing touches AWS: the `aws` on `PATH` is a shim that records its arguments and exits.
+
+Assertions use side effects only: what the hook saw, the audit log, whether the fake `aws` ran, and the result sent back to the mock. If Claude Code never reports back on the call, that is a harness error (usually the mock lacks something a new release needs), and it is reported apart from a behavior failure. If it reports back but the hook never saw the call, that is a failure.
+
+To run it yourself, with `claude` of the version you want on your `PATH`, as a user that isn't root (Claude Code refuses the bypass flag as root):
+
+```sh
+bun scripts/compat/probe.ts --version "$(claude --version | cut -d' ' -f1)" --out /tmp/compat
+```
+
 ## License
 
 [MIT](LICENSE)

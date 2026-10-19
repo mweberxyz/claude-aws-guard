@@ -1,0 +1,84 @@
+name: Claude Code compatibility
+
+# Runs the real `claude` with the guard installed, in normal and --dangerously-skip-permissions mode,
+# and checks the behavior the README and SECURITY.md describe. See README, "Compatibility checks".
+#
+# A mock API stands in for the model (scripts/compat/mock_api.ts), so this needs no API key and holds
+# no secrets, which is why it can run on pull requests, forks included. Keep it that way: never add a
+# secret to this workflow, and never trigger it with pull_request_target.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: claude-compat-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The oldest Claude Code the README promises to support. test/compat.test.ts keeps it equal to the
+  # README's requirement.
+  MIN_CLAUDE_CODE: "2.1.295"
+
+jobs:
+  versions:
+    name: Pick Claude Code versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      # The declared minimum, the newest release, and the release before it.
+      - id: pick
+        run: bun scripts/compat/versions.ts
+
+  probe:
+    name: Claude Code ${{ matrix.version }} (${{ matrix.labels }})
+    needs: versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # The runner user isn't root: Claude Code refuses --dangerously-skip-permissions as root.
+      - name: Install Claude Code ${{ matrix.version }}
+        env:
+          VERSION: ${{ matrix.version }}
+        run: npm install -g "@anthropic-ai/claude-code@${VERSION}"
+      - name: Probe with claude -p
+        env:
+          VERSION: ${{ matrix.version }}
+          LABELS: ${{ matrix.labels }}
+        run: bun scripts/compat/probe.ts --version "$VERSION" --labels "$LABELS" --out compat-results
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: compat-results-${{ matrix.version }}
+          path: compat-results/
+          if-no-files-found: warn
