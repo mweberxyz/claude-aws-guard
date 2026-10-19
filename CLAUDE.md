@@ -57,6 +57,15 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 5. `bun run build`, then `bun run typecheck && bun test --coverage && bun run validate`.
 6. Update `README.md` and `CHANGELOG.md` if behavior or options changed.
 
+## Versioning
+
+Semver, read the way pre-1.0 software is usually read. While the version is `0.x.y`:
+
+- **Patch (`0.x.Y`)**: bug fixes, and new features or options that are completely backwards compatible. A new option must default to the old behavior, and existing configs and commands must decide exactly as before.
+- **Minor (`0.X.0`)**: anything that is not completely backwards compatible, including tightening a default (a new hard deny, a stricter rule), as `CHANGELOG.md` says.
+
+To release, set the same version in `package.json` and `plugins/aws-guard/.claude-plugin/plugin.json`, then give the `CHANGELOG.md` section a version and date and add its link at the bottom. Don't create tags: the signer only signs commits.
+
 ## Known limits
 
 See "What it doesn't protect against" in the README and `SECURITY.md`. The ones that matter when editing:
