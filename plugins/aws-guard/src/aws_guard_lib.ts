@@ -62,6 +62,7 @@ const DENY: [string, RegExp][] = [
 // Settings a user can change through the plugin's userConfig. Claude Code hands them to the hook as
 // CLAUDE_PLUGIN_OPTION_<KEY> environment variables.
 export type Config = {
+  blockProfiles: boolean; // apply blockedProfile at all; off skips the blocked-profile rule entirely
   blockedProfile: RegExp; // profiles matching this are always denied
   extraDenied: [string, RegExp][]; // extra [service, operation] pairs to always deny
   requireQuery: boolean; // read-only verbs need a narrowing --query
@@ -69,6 +70,7 @@ export type Config = {
 };
 
 export const DEFAULT_CONFIG: Config = {
+  blockProfiles: true,
   blockedProfile: /prod/i,
   extraDenied: [],
   requireQuery: true,
@@ -110,12 +112,15 @@ export function loadConfig(env: Record<string, string | undefined>): Config | { 
     extraDenied.push([service, new RegExp(`^${prefix}`)]);
   }
 
+  const blockProfiles = parseBool(opt("BLOCK_PROFILES"), DEFAULT_CONFIG.blockProfiles, "block_profiles");
+  if (typeof blockProfiles === "object") return blockProfiles;
   const requireQuery = parseBool(opt("REQUIRE_QUERY"), DEFAULT_CONFIG.requireQuery, "require_query");
   if (typeof requireQuery === "object") return requireQuery;
   const useEnvProfile = parseBool(opt("USE_ENVIRONMENT_PROFILE"), false, "use_environment_profile");
   if (typeof useEnvProfile === "object") return useEnvProfile;
 
   return {
+    blockProfiles,
     blockedProfile,
     extraDenied,
     requireQuery,
@@ -199,7 +204,7 @@ export function evaluate(cmd: string, config: Config | { error: string } = DEFAU
   if (service === "ssm" && has("--with-decryption")) {
     return { decision: "deny", reason: "Decrypting SSM parameters is blocked" };
   }
-  if (profile && config.blockedProfile.test(profile)) {
+  if (profile && config.blockProfiles && config.blockedProfile.test(profile)) {
     return { decision: "deny", reason: `Profile '${profile}' is blocked (it matches the blocked profile pattern)` };
   }
 

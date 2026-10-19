@@ -94,6 +94,12 @@ describe("configuration from CLAUDE_PLUGIN_OPTION_* variables", () => {
     expect((await withEnv("aws --profile prod s3 ls", env)).decision).toBe("allow");
   });
 
+  test("block_profiles off disables the blocked profile rule", async () => {
+    const env = { CLAUDE_PLUGIN_OPTION_BLOCK_PROFILES: "false" };
+    expect((await withEnv("aws --profile prod s3 ls", env)).decision).toBe("allow");
+    expect((await withEnv("aws s3 ls", env)).decision).toBe("deny");
+  });
+
   test("extra denied commands and require_query", async () => {
     const r = await withEnv(`${P} rds describe-db-instances --query Foo`, {
       CLAUDE_PLUGIN_OPTION_EXTRA_DENIED_COMMANDS: "rds",

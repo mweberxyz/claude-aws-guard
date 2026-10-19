@@ -46,7 +46,7 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 - **Keep `aws_guard_lib.ts` free of I/O**, and keep `aws_guard.ts` thin.
 - **Keep startup cheap.** The hook runs before every Bash call. Don't read stdin through `process.stdin` (about 17 ms extra on Bun) and don't add imports with heavy startup. Re-run `bun run bench` if you change how the script starts.
 - **Runtime preference is Bun, then Node.** Bun starts about four times faster. The hook must keep working on Node, and the tests run the built file under Node.
-- **Decision order in `evaluate()` matters:** configuration error, then compound/indirect commands ask, then hard denies (built-in, then configured), then the blocked-profile pattern, then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
+- **Decision order in `evaluate()` matters:** configuration error, then compound/indirect commands ask, then hard denies (built-in, then configured), then the blocked-profile pattern (skipped when `block_profiles` is off), then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
 
 ## When changing a rule
 
@@ -56,6 +56,15 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 4. Only touch the smoke set in `test/aws_guard.test.ts` if a decision type or the I/O path changed.
 5. `bun run build`, then `bun run typecheck && bun test --coverage && bun run validate`.
 6. Update `README.md` and `CHANGELOG.md` if behavior or options changed.
+
+## Versioning
+
+Semver, read the way pre-1.0 software is usually read. While the version is `0.x.y`:
+
+- **Patch (`0.x.Y`)**: bug fixes, and new features or options that are completely backwards compatible. A new option must default to the old behavior, and existing configs and commands must decide exactly as before.
+- **Minor (`0.X.0`)**: anything that is not completely backwards compatible, including tightening a default (a new hard deny, a stricter rule), as `CHANGELOG.md` says.
+
+To release, set the same version in `package.json` and `plugins/aws-guard/.claude-plugin/plugin.json`, then give the `CHANGELOG.md` section a version and date and add its link at the bottom. Don't create tags: the signer only signs commits.
 
 ## Known limits
 
