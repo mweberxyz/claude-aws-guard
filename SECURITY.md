@@ -9,7 +9,7 @@ aws-guard is a **guard rail** for an AI agent that is well-intentioned but falli
 What it assumes:
 
 - The agent's `aws` calls go through the Bash tool as a command string.
-- Claude Code runs the hook and honors its decision.
+- Claude Code runs the hook and honors its decision. That includes under `--dangerously-skip-permissions`, which isn't documented behavior; a CI check re-verifies it against real Claude Code releases on every change and every week, and opens an issue if it changes. See [Compatibility checks](README.md#compatibility-checks) for what it covers and what it doesn't.
 - Nothing has modified the hook's files, its registration, or the audit log. By default Claude *can* modify them; [docs/hardening.md](docs/hardening.md) covers locking that down.
 
 ## Reporting a vulnerability

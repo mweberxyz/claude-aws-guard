@@ -205,10 +205,33 @@ A second hook logs every Bash call's input, so the check also asserts that `perm
 
 Assertions use side effects only: what the hook saw, the audit log, whether the fake `aws` ran, and the result sent back to the mock. If Claude Code never reports back on the call, that is a harness error (usually the mock lacks something a new release needs), and it is reported apart from a behavior failure. If it reports back but the hook never saw the call, that is a failure.
 
+#### What each claim rests on
+
+Check names are `<mode>/<command>`, as they appear in the run summary: `normal` is without the flag, `bypass` is with `--dangerously-skip-permissions`.
+
+| What these docs say | Checked by | What it doesn't cover |
+|---|---|---|
+| The hook runs for every Bash call, also with `--dangerously-skip-permissions` | every check: it fails with `hook_not_run` if Claude Code ran the call and the logging hook next to the guard never saw it | |
+| The hook payload's `permission_mode` is `bypassPermissions` with the flag, and another documented value without it | the `permission_mode` assertion on every check | modes other than the two above |
+| A hard deny still blocks under the flag, is audited, and Claude is told why | `normal/deny` and `bypass/deny`: the fake `aws` doesn't run, the audit line says `deny`, and the result sent back to the mock contains the reason as an error | how a real model reacts to the reason |
+| An allowed call runs, and a non-`aws` command passes through silently | `*/allow` and `*/passthrough` | |
+| An `ask` doesn't run silently under the flag | `bypass/ask`: the fake `aws` doesn't run, the audit line says `ask` | |
+| An `ask` still prompts the user under the flag | `bypass/ask_prompt`: the `ask` reaches the Agent SDK's `canUseTool` callback, with `normal/ask_prompt` as the control | the wording or look of the prompt, and how an interactive terminal shows it |
+| The plugin needs Claude Code 2.1.295 or later | all of the above, on that exact version | |
+
+The checks use the manual install (`examples/settings.json`), which is the same hook command and the same decisions as the plugin install, but they don't exercise `hooks/hooks.json` or the plugin options, or whether plugin hooks honor `onFailure` the way settings hooks do. They establish that the three Claude Code versions tested behave as above on every change and every week; they don't promise it for versions that don't exist yet. And because the model is a mock, they say nothing about how a real model behaves: they are about what Claude Code does with a tool call.
+
 To run it yourself, with `claude` of the version you want on your `PATH`, as a user that isn't root (Claude Code refuses the bypass flag as root):
 
 ```sh
 bun scripts/compat/probe.ts --version "$(claude --version | cut -d' ' -f1)" --out /tmp/compat
+```
+
+The Agent SDK check needs the SDK release that bundles that Claude Code version (`bun scripts/compat/versions.ts` prints the match as `sdk`):
+
+```sh
+npm install --prefix /tmp/sdk --ignore-scripts @anthropic-ai/claude-agent-sdk@<sdk version>
+bun scripts/compat/ask_sdk.ts --version <claude version> --sdk-dir /tmp/sdk --out /tmp/compat
 ```
 
 #### When a check fails

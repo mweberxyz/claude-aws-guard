@@ -16,6 +16,9 @@ A Claude Code plugin (`aws-guard`) containing a PreToolUse hook that guards `aws
 | `test/aws_guard_lib.test.ts` | In-process tests. Owns the full policy matrix, the parser and the config. |
 | `test/aws_guard.test.ts` | Subprocess tests: a small smoke set, config through env vars, stdin handling, the built file under Node, fail-closed, audit log, the `hooks.json` wrapper. |
 | `scripts/bench.ts` | Latency benchmark. Results in `docs/benchmarking.md`. |
+| `scripts/compat/` | The Claude Code compatibility check: `lib.ts` (pure: versions, assertions, report text), `mock_api.ts` (the stand-in for the Anthropic API), `harness.ts` (the throwaway project and fake `aws`), `probe.ts` (`claude -p`), `ask_sdk.ts` (Agent SDK `canUseTool`), `versions.ts`, `report.ts` (summary and issue). |
+| `.github/workflows/compat.yml` | Runs the above on pull requests, pushes to `main`, release tags, weekly and on demand. No secrets. |
+| `test/compat.test.ts` | Unit tests for `scripts/compat/lib.ts` and `mock_api.ts`, and a dry run of `report.ts`. |
 | `docs/hardening.md` | How to stop Claude changing the hook. Not applied by default. |
 | `SECURITY.md`, `CHANGELOG.md`, `README.md` | Public docs. |
 | `.claude/skills/release/SKILL.md` | The release process: whether to release, which version, the release commit and the `gh release create` command. |
@@ -36,7 +39,7 @@ bun run validate          # claude plugin validate, plugin and marketplace
 bun run bench             # latency
 ```
 
-Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the tests. Keep the lib at 100% function and line coverage.
+Coverage only sees `aws_guard_lib.ts`, `scripts/compat/lib.ts` and `scripts/compat/mock_api.ts`, because `aws_guard.ts` and the other scripts run in subprocesses in the tests. Keep all three at 100% function and line coverage.
 
 ## Rules to preserve
 
@@ -45,6 +48,7 @@ Coverage only sees the lib, because `aws_guard.ts` runs in a subprocess in the t
 - **The audit log is written by the shell**, not the script. The script writes one JSON line per `aws` call to stderr (`ts`, `decision`, `reason`, `cmd`), and the wrapper appends stderr to `~/.claude/aws-audit.log`. If that file can't be opened, the wrapper blocks the call.
 - **Configuration fails closed too.** Anything in `loadConfig` that can't be parsed is an error, never a default. A config error denies `aws` calls only and must never affect other commands. The built-in hard denies and the explicit-profile requirement cannot be configured away.
 - **Keep `aws_guard_lib.ts` free of I/O**, and keep `aws_guard.ts` thin.
+- **`compat.yml` holds no secrets and uses a mock API, not a model.** What it checks is Claude Code's handling of a tool call, which a model doesn't influence. That is what lets it run on pull requests, forks included: never add a secret to it, and never trigger it with `pull_request_target`. Only the `report` job may have `issues: write`, and it must not run on pull requests or run code from npm. Report text is assembled from fixed strings (`sanitizeLeg` in `scripts/compat/lib.ts`). Keep the mock minimal: if a new Claude Code release stops reporting back, fix the mock, and that shows up as a harness error, not a failure. A change to the documented Claude Code behavior in the README or `SECURITY.md` should change the claims table under "Compatibility checks" too. If the README's minimum Claude Code version changes, change `MIN_CLAUDE_CODE` in the workflow (a test checks they match).
 - **Keep startup cheap.** The hook runs before every Bash call. Don't read stdin through `process.stdin` (about 17 ms extra on Bun) and don't add imports with heavy startup. Re-run `bun run bench` if you change how the script starts.
 - **Runtime preference is Bun, then Node.** Bun starts about four times faster. The hook must keep working on Node, and the tests run the built file under Node.
 - **Decision order in `evaluate()` matters:** configuration error, then compound/indirect commands ask, then hard denies (built-in, then configured), then the blocked-profile pattern (skipped when `block_profiles` is off), then missing profile, then the read-verb `--query` rules, then `s3 ls` and `--dry-run`, then ask for everything else.
@@ -80,5 +84,5 @@ See "What it doesn't protect against" in the README and `SECURITY.md`. The ones 
 - The hook only sees the Bash command string.
 - Anything mentioning `aws` after whitespace, a quote or a `/` is treated as an `aws` call, so unrelated compound commands that merely contain the word get an `ask` and an audit line. That is intentional.
 - The wrapper's `2>>` redirect and `||` assume a POSIX shell.
-- Verified against the hooks docs: exit 2 blocks, other non-zero exits don't (hence `onFailure`), `permissionDecision` is `allow`/`deny`/`ask`/`defer`, `timeout` is in seconds. Observed working inside Claude Code: deny (reason shown to Claude), allow and hook-failure blocking. **Not yet observed:** how an `ask` prompts an interactive user, and whether plugin hooks honor `onFailure` exactly like settings hooks (`claude plugin validate` accepts it).
+- Verified against the hooks docs: exit 2 blocks, other non-zero exits don't (hence `onFailure`), `permissionDecision` is `allow`/`deny`/`ask`/`defer`, `timeout` is in seconds. Observed working inside Claude Code: deny (reason shown to Claude), allow and hook-failure blocking. **Not yet observed:** how an `ask` prompts an interactive user, and whether plugin hooks honor `onFailure` exactly like settings hooks (`claude plugin validate` accepts it). The compatibility check (README, "Compatibility checks") re-verifies the deny, allow, `permission_mode` and `ask` behavior on every change and every week, under `--dangerously-skip-permissions` too, but not those two.
 - `onFailure` needs Claude Code 2.1.295 or later.
