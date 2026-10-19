@@ -1,7 +1,7 @@
 {
   "name": "aws-guard",
   "displayName": "AWS Guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Guards aws CLI calls made through Claude Code's Bash tool: requires an explicit non-prod profile and a narrowing --query on reads, hard-denies risky commands, asks on mutations, fails closed and keeps an audit log.",
   "author": {
     "name": "mweberxyz",

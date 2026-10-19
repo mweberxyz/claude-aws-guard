@@ -2,7 +2,7 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org). Because the policy decides what Claude may run, tightening a default (a new hard deny, a stricter rule) is treated as a breaking change.
 
-## [Unreleased]
+## [0.1.1] - 2026-10-19
 
 ### Added
 
@@ -38,4 +38,5 @@ First public release.
 - README, [security policy](SECURITY.md), [hardening guide](docs/hardening.md) and [benchmarks](docs/benchmarking.md).
 - 190 tests (100% function and line coverage of the policy lib), `tsc --strict`, and CI that checks the build is current and runs `claude plugin validate --strict`.
 
+[0.1.1]: https://github.com/mweberxyz/claude-aws-guard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/mweberxyz/claude-aws-guard/releases/tag/v0.1.0
