@@ -75,6 +75,10 @@ jobs:
           VERSION: ${{ matrix.version }}
           LABELS: ${{ matrix.labels }}
         run: bun scripts/compat/probe.ts --version "$VERSION" --labels "$LABELS" --out compat-results
+      # Pull requests don't get the report job (it can write issues), so show this version's table here.
+      - name: Summarize
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: bun scripts/compat/report.ts compat-results --dry-run
       - name: Upload results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
@@ -82,3 +86,33 @@ jobs:
           name: compat-results-${{ matrix.version }}
           path: compat-results/
           if-no-files-found: warn
+
+  # Turns the probe results into a summary and, outside pull requests, a labeled issue when something
+  # is off. A separate job so that the only token that can write issues never runs code from npm or
+  # from the pull request under test. Pull requests just go red.
+  report:
+    name: Report
+    needs: [versions, probe]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.repository == 'mweberxyz/claude-aws-guard' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Download results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'compat-results-*' --dir results || mkdir -p results
+      - name: Summarize and file an issue if needed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATRIX: ${{ needs.versions.outputs.matrix }}
+        run: bun scripts/compat/report.ts results

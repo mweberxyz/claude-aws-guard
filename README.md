@@ -209,6 +209,12 @@ To run it yourself, with `claude` of the version you want on your `PATH`, as a u
 bun scripts/compat/probe.ts --version "$(claude --version | cut -d' ' -f1)" --out /tmp/compat
 ```
 
+#### When a check fails
+
+On a pull request, a failing check just turns the run red, and each version's table is in its run summary. On every other run (`main`, release tags, weekly, manual) a last job, `Report`, writes one table for all versions to the run summary. When any check fails, or a version produces no usable results, it opens an issue labeled `compat-check`, or comments on the one that is already open. The text says which versions failed: if only the newest release does, Claude Code's behavior most likely changed upstream, and the docs or the plugin need a look. When a later run passes everything, the job comments and closes the issue.
+
+That job is separate from the probe jobs because it is the only one that can write issues, so the token that can write never runs code from npm or from the pull request under test. The probe results are read back through an allow-list, and the issue text is assembled from fixed strings, so nothing a probe wrote can reach an issue.
+
 ## License
 
 [MIT](LICENSE)

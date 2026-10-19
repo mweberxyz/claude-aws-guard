@@ -186,11 +186,187 @@ export interface LegResult {
   error?: ErrorCode;
 }
 
-export type ErrorCode = "version_mismatch" | "claude_failed";
+export type ErrorCode = "version_mismatch" | "claude_failed" | "no_results";
 
 export function legStatus(leg: LegResult): Status {
   if (leg.checks.some((c) => c.status === "fail")) return "fail";
   if (leg.error || leg.checks.some((c) => c.status === "error")) return "error";
   if (leg.checks.length === 0) return "error";
   return "pass";
+}
+
+// ---- Untrusted input ---------------------------------------------------------------------------
+
+const STATUSES: Status[] = ["pass", "fail", "error"];
+const MODES: Mode[] = ["normal", "bypass"];
+const IDS: string[] = CASES.map((c) => c.id);
+const FAILURES: FailureCode[] = [
+  "hook_not_run",
+  "permission_mode",
+  "audit_decision",
+  "audit_missing",
+  "audit_unexpected",
+  "unexpected_execution",
+  "missing_execution",
+  "reason_not_shown",
+];
+const LABELS: VersionLabel[] = ["minimum", "previous", "latest"];
+const ERRORS: ErrorCode[] = ["version_mismatch", "claude_failed", "no_results"];
+
+// The probe jobs run code from npm and from the pull request under test, so what they write is not
+// trusted by the job that files issues. Every field is checked against a fixed list and anything else
+// is dropped; nothing free-form survives, so nothing a probe could influence reaches an issue body.
+export function sanitizeLeg(raw: unknown): LegResult | null {
+  const r = raw as any;
+  if (!r || typeof r !== "object" || typeof r.version !== "string" || !SEMVER.test(r.version)) return null;
+  const labels = Array.isArray(r.labels) ? LABELS.filter((l) => r.labels.includes(l)) : [];
+  const checks: CheckResult[] = [];
+  for (const c of Array.isArray(r.checks) ? r.checks : []) {
+    if (!MODES.includes(c?.mode) || !IDS.includes(c?.id) || !STATUSES.includes(c?.status)) continue;
+    checks.push({
+      mode: c.mode,
+      id: c.id,
+      status: c.status,
+      failed: Array.isArray(c.failed) ? FAILURES.filter((f) => c.failed.includes(f)) : [],
+    });
+  }
+  const leg: LegResult = { version: r.version, labels, checks };
+  if (typeof r.observedVersion === "string" && SEMVER.test(r.observedVersion)) leg.observedVersion = r.observedVersion;
+  if (ERRORS.includes(r.error)) leg.error = r.error;
+  return leg;
+}
+
+// ---- Report text -------------------------------------------------------------------------------
+
+const ICON: Record<Status, string> = { pass: "✅", fail: "❌", error: "⚠️" };
+
+export const LEGEND = "✅ pass · ❌ fail · ⚠️ harness error (Claude Code never reported back on the call, or could not run)";
+
+const ERROR_TEXT: Record<ErrorCode, string> = {
+  version_mismatch: "the installed `claude` isn't the requested version",
+  claude_failed: "`claude` ran but never reported back on the call, so nothing could be judged. The mock API probably lacks something this release needs",
+  no_results: "the job produced no results (install or runner failure)",
+};
+
+const FAILURE_TEXT: Record<FailureCode, string> = {
+  hook_not_run: "Claude Code ran the command but the hook never saw it",
+  permission_mode: "`permission_mode` in the hook payload was not what the mode implies",
+  audit_decision: "the audit log recorded a different decision",
+  audit_missing: "no audit line was written",
+  audit_unexpected: "an audit line was written for a command that should pass through",
+  unexpected_execution: "the command ran, but must not have",
+  missing_execution: "the command did not run, but must have",
+  reason_not_shown: "Claude was not told why the call was denied",
+};
+
+const label = (leg: LegResult) => `${leg.version} (${leg.labels.join(", ") || "unlabeled"})`;
+
+export function summaryTable(legs: LegResult[]): string {
+  const rows = new Set<string>();
+  for (const leg of legs) for (const c of leg.checks) rows.add(`${c.mode}/${c.id}`);
+  const header = ["Check", ...legs.map(label)];
+  const lines = [`| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`];
+  for (const row of [...rows].sort()) {
+    const cells = legs.map((leg) => {
+      const c = leg.checks.find((c) => `${c.mode}/${c.id}` === row);
+      return c ? ICON[c.status] : "";
+    });
+    lines.push(`| \`${row}\` | ${cells.join(" | ")} |`);
+  }
+  lines.push(`| **Leg** | ${legs.map((l) => ICON[legStatus(l)]).join(" | ")} |`);
+  return lines.join("\n");
+}
+
+// What a failure most likely means, from which versions failed.
+export function classify(legs: LegResult[]): string {
+  const bad = legs.filter((l) => legStatus(l) !== "pass");
+  if (bad.length === 0) return "All legs pass.";
+  const has = (l: VersionLabel) => bad.some((b) => b.labels.includes(l));
+  const covered = (l: VersionLabel) => legs.some((leg) => leg.labels.includes(l));
+  const onlyLatest = has("latest") && !has("minimum") && !has("previous") && covered("minimum") && covered("previous");
+  if (onlyLatest) {
+    return "**Only the latest release fails.** Claude Code's behavior probably changed upstream in that release. Check the release notes, decide whether the README and SECURITY.md claims still hold, and fix the plugin or the docs.";
+  }
+  if (has("minimum")) {
+    return "**The declared minimum version fails.** Either an assumption in the docs was wrong from the start, or the harness is broken. Check this before the newer legs.";
+  }
+  return "**More than the latest release fails.** Look at the legs below; if every leg fails the same way, suspect the harness or the mock API first.";
+}
+
+export function renderReport(legs: LegResult[], runUrl: string): string {
+  const out = [classify(legs), "", summaryTable(legs), "", LEGEND, ""];
+  for (const leg of legs) {
+    const notes: string[] = [];
+    if (leg.error) notes.push(`- ${ERROR_TEXT[leg.error]}`);
+    for (const c of leg.checks) {
+      for (const f of c.failed) notes.push(`- \`${c.mode}/${c.id}\`: ${FAILURE_TEXT[f]}`);
+    }
+    if (notes.length) out.push(`**${label(leg)}**`, "", ...notes, "");
+  }
+  out.push(`Run: ${runUrl}`);
+  return out.join("\n");
+}
+
+// ---- Combining legs and deciding what to do about them -----------------------------------------
+
+// One version can be reported by several scripts.
+export function mergeLegs(legs: LegResult[]): LegResult[] {
+  const merged = new Map<string, LegResult>();
+  for (const leg of legs) {
+    const into = merged.get(leg.version);
+    if (!into) {
+      merged.set(leg.version, { ...leg, labels: [...leg.labels], checks: [...leg.checks] });
+      continue;
+    }
+    into.labels = LABELS.filter((l) => into.labels.includes(l) || leg.labels.includes(l));
+    into.checks.push(...leg.checks);
+    into.observedVersion ??= leg.observedVersion;
+    into.error ??= leg.error;
+  }
+  return [...merged.values()].sort((a, b) => compareVersions(a.version, b.version));
+}
+
+// The matrix the versions job produced ({"include":[{"version":"2.1.303","labels":"latest"}]}), checked
+// like the results are. Empty if it can't be read, e.g. because that job failed.
+export function sanitizeMatrix(raw: string | undefined): VersionSpec[] {
+  try {
+    const include = JSON.parse(raw ?? "").include;
+    const specs: VersionSpec[] = [];
+    for (const m of Array.isArray(include) ? include : []) {
+      if (typeof m?.version !== "string" || !SEMVER.test(m.version)) continue;
+      const wanted = typeof m.labels === "string" ? m.labels.split(",") : [];
+      specs.push({ version: m.version, labels: LABELS.filter((l) => wanted.includes(l)) });
+    }
+    return specs;
+  } catch {
+    return [];
+  }
+}
+
+// A version that should have reported but left no results (the install or the runner failed).
+export function withMissing(legs: LegResult[], expected: VersionSpec[]): LegResult[] {
+  const have = new Set(legs.map((l) => l.version));
+  const missing = expected.filter((e) => !have.has(e.version));
+  return mergeLegs([...legs, ...missing.map((e): LegResult => ({ ...e, checks: [], error: "no_results" }))]);
+}
+
+export type Action =
+  | { type: "create"; title: string; body: string }
+  | { type: "comment"; number: number; body: string }
+  | { type: "close"; number: number };
+
+export const ISSUE_TITLE = "Claude Code compatibility check failed";
+
+// One open issue at a time: a problem opens it or adds to it, and a clean run closes it.
+export function planActions(legs: LegResult[], runUrl: string, openIssue: number | null): Action[] {
+  const problem = legs.length === 0 || legs.some((l) => legStatus(l) !== "pass");
+  const body = legs.length === 0 ? `No results were produced.\n\nRun: ${runUrl}` : renderReport(legs, runUrl);
+  if (problem) {
+    return openIssue === null ? [{ type: "create", title: ISSUE_TITLE, body }] : [{ type: "comment", number: openIssue, body }];
+  }
+  if (openIssue === null) return [];
+  return [
+    { type: "comment", number: openIssue, body: `Everything passes again.\n\n${body}` },
+    { type: "close", number: openIssue },
+  ];
 }
