@@ -158,6 +158,10 @@ The hook is built so that a problem blocks a command instead of letting it throu
 - **Claude changing the hook itself.** The Edit tool isn't a Bash command, so the hook can't see it. See [docs/hardening.md](docs/hardening.md).
 - **Loose matching.** Any command that mentions `aws` after whitespace, a quote or a `/` is treated as an `aws` call, so even a heredoc that only contains the word gets an `ask` and an audit line. This is noisy on purpose.
 
+### `--dangerously-skip-permissions`
+
+The hook still runs when Claude Code is started with `--dangerously-skip-permissions` (`permission_mode` is `bypassPermissions`). Observed on Claude Code in October 2026: a `deny` still blocks the call and an `ask` still prompts you. Don't rely on that alone, since the flag exists to skip prompts and the hooks docs don't promise it. Keep the `permissions.deny` rules from [Recommended: add the deny rules](#recommended-add-the-deny-rules); Claude Code enforces them in every mode.
+
 Back the profile with a read-only IAM role or SSO permission set so the hook isn't your only protection. To report a way around the hook, see [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
