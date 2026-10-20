@@ -188,6 +188,62 @@ bun run bench           # per-call latency
 
 `dist/aws_guard.mjs` is committed because the plugin ships it; always rebuild it when you change `src/`. See [CLAUDE.md](CLAUDE.md) for the layout and the rules to preserve.
 
+### Compatibility checks
+
+Some of what these docs say about Claude Code is observed behavior, not documented behavior, so it could change in a release without anyone noticing. A workflow, [`compat.yml`](.github/workflows/compat.yml), checks it against the real `claude`. It runs on pull requests, on pushes to `main`, weekly, on release tags and on demand.
+
+Each run covers three Claude Code versions: the minimum this README requires, the newest release and the release before it. For each version it starts `claude -p` with the guard installed the [manual way](#manual-install-without-the-plugin), in normal mode and with `--dangerously-skip-permissions`, and has Claude Code run four fixed commands:
+
+| Command | Expected |
+|---|---|
+| `aws s3 ls --profile test` | allowed: the fake `aws` runs, the audit log says `allow` |
+| `aws iam list-users --profile prod` | denied: the fake `aws` does not run, the audit log says `deny`, and Claude is told the reason |
+| `aws s3 cp ./x s3://b/x --profile test` | asks: the fake `aws` does not run, the audit log says `ask` |
+| `echo hello` | passes through: no audit line |
+
+A second hook logs every Bash call's input, so the check also asserts that `permission_mode` is `bypassPermissions` with the flag and a different documented value without it.
+
+`claude -p` has no prompt to show, so it can only prove that the `ask`ed command did not run, not that a user would have been asked. A second script, [`scripts/compat/ask_sdk.ts`](scripts/compat/ask_sdk.ts), closes that gap with the [Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk), using the SDK release that bundles the same Claude Code version. The SDK calls its `canUseTool` callback where Claude Code would show a permission prompt, so the check asserts that the `ask` reaches the callback, with `--dangerously-skip-permissions` and in normal mode as a control. The callback always denies, so nothing runs. (The SDK warns that `canUseTool` "will not be invoked" under `bypassPermissions`; a hook's `ask` still reaches it, which is what this check watches.)
+
+**There is no model and no API key.** What the docs claim is about Claude Code's own handling of a tool call (hooks, permission modes, what it reports back), not about what a model says. So `ANTHROPIC_BASE_URL` points at a small mock of the Messages API, [`scripts/compat/mock_api.ts`](scripts/compat/mock_api.ts), that asks for one scripted Bash command and records the result Claude Code sends back. The run is deterministic, costs nothing and holds no secrets, which is why it can run on pull requests from forks. Nothing touches AWS: the `aws` on `PATH` is a shim that records its arguments and exits.
+
+Assertions use side effects only: what the hook saw, the audit log, whether the fake `aws` ran, and the result sent back to the mock. If Claude Code never reports back on the call, that is a harness error (usually the mock lacks something a new release needs), and it is reported apart from a behavior failure. If it reports back but the hook never saw the call, that is a failure.
+
+#### What each claim rests on
+
+Check names are `<mode>/<command>`, as they appear in the run summary: `normal` is without the flag, `bypass` is with `--dangerously-skip-permissions`.
+
+| What these docs say | Checked by | What it doesn't cover |
+|---|---|---|
+| The hook runs for every Bash call, also with `--dangerously-skip-permissions` | every check: it fails with `hook_not_run` if Claude Code ran the call and the logging hook next to the guard never saw it | |
+| The hook payload's `permission_mode` is `bypassPermissions` with the flag, and another documented value without it | the `permission_mode` assertion on every check | modes other than the two above |
+| A hard deny still blocks under the flag, is audited, and Claude is told why | `normal/deny` and `bypass/deny`: the fake `aws` doesn't run, the audit line says `deny`, and the result sent back to the mock contains the reason as an error | how a real model reacts to the reason |
+| An allowed call runs, and a non-`aws` command passes through silently | `*/allow` and `*/passthrough` | |
+| An `ask` doesn't run silently under the flag | `bypass/ask`: the fake `aws` doesn't run, the audit line says `ask` | |
+| An `ask` still prompts the user under the flag | `bypass/ask_prompt`: the `ask` reaches the Agent SDK's `canUseTool` callback, with `normal/ask_prompt` as the control | the wording or look of the prompt, and how an interactive terminal shows it |
+| The plugin needs Claude Code 2.1.295 or later | all of the above, on that exact version | |
+
+The checks use the manual install (`examples/settings.json`), which is the same hook command and the same decisions as the plugin install, but they don't exercise `hooks/hooks.json` or the plugin options, or whether plugin hooks honor `onFailure` the way settings hooks do. They establish that the three Claude Code versions tested behave as above on every change and every week; they don't promise it for versions that don't exist yet. And because the model is a mock, they say nothing about how a real model behaves: they are about what Claude Code does with a tool call.
+
+To run it yourself, with `claude` of the version you want on your `PATH`, as a user that isn't root (Claude Code refuses the bypass flag as root):
+
+```sh
+bun scripts/compat/probe.ts --version "$(claude --version | cut -d' ' -f1)" --out /tmp/compat
+```
+
+The Agent SDK check needs the SDK release that bundles that Claude Code version (`bun scripts/compat/versions.ts` prints the match as `sdk`):
+
+```sh
+npm install --prefix /tmp/sdk --ignore-scripts @anthropic-ai/claude-agent-sdk@<sdk version>
+bun scripts/compat/ask_sdk.ts --version <claude version> --sdk-dir /tmp/sdk --out /tmp/compat
+```
+
+#### When a check fails
+
+On a pull request, a failing check just turns the run red, and each version's table is in its run summary. On every other run (`main`, release tags, weekly, manual) a last job, `Report`, writes one table for all versions to the run summary. When any check fails, or a version produces no usable results, it opens an issue labeled `compat-check`, or comments on the one that is already open. The text says which versions failed: if only the newest release does, Claude Code's behavior most likely changed upstream, and the docs or the plugin need a look. When a later run passes everything, the job comments and closes the issue.
+
+That job is separate from the probe jobs because it is the only one that can write issues, so the token that can write never runs code from npm or from the pull request under test. The probe results are read back through an allow-list, and the issue text is assembled from fixed strings, so nothing a probe wrote can reach an issue.
+
 ## License
 
 [MIT](LICENSE)

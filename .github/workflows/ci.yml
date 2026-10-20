@@ -34,7 +34,7 @@ jobs:
             echo
             row=$(grep -m1 '^All files' test-output.txt || true)
             if [ -n "$row" ]; then
-              echo "$row" | awk -F'|' '{gsub(/ /,"",$2); gsub(/ /,"",$3); print "**" $2 "% of functions, " $3 "% of lines** (policy lib)"}'
+              echo "$row" | awk -F'|' '{gsub(/ /,"",$2); gsub(/ /,"",$3); print "**" $2 "% of functions, " $3 "% of lines** (policy lib and compat scripts)"}'
             fi
             echo
             echo '```text'
